@@ -1,0 +1,274 @@
+defaults_test:
+  # Job
+  n_steps: 100_000_000
+  n_env_steps: 1_000_000_000
+  offline_data_dir:
+  offline_prefill_dir:
+  offline_test_dir:
+  offline_eval_dir:
+  log_interval: 100
+  logbatch_interval: 1000
+  save_interval: 500
+  eval_interval: 2000
+  data_workers: 4
+  allow_mid_reset: True
+  enable_profiler: False
+  verbose: False
+
+  # Features
+  image_key: image
+  image_size: 64
+  image_channels: 3
+  image_categorical: False
+  action_dim: 0
+  clip_rewards:
+  
+  # Probe features
+  map_key:
+  map_size: 0
+  map_channels: 0
+  map_categorical: True
+  goals_size: 0
+  
+  # Training
+  buffer_size: 10_000_000
+  buffer_size_offline: 0
+  # reset_interval: 200
+  reset_interval: 2000
+  iwae_samples: 1
+  kl_balance: 0.8
+  kl_weight: 1.0
+  image_weight: 1.0
+  vecobs_weight: 1.0
+  reward_weight: 1.0
+  terminal_weight: 1.0
+  adam_lr: 3.0e-4
+  adam_lr_actor: 1.0e-4
+  adam_lr_critic: 1.0e-4
+  adam_eps: 1.0e-5
+  keep_state: True
+  batch_length: 480
+  # batch_size: 4
+  batch_size: 2
+  # device: "cuda:0"
+  device: "cuda:2"
+  # device: cpu
+  grad_clip: 200
+  grad_clip_ac: 200
+  image_decoder_min_prob: 0
+  amp: False  # AMP no longer helps on A100
+  probe_gradients: False  # for baselines
+
+  # Eval
+  test_batches: 61  # For unbiased test needs to be enough to cover full episodes
+  test_batch_size: 10  # Smaller for faster test
+  test_save_size: 1
+  eval_batches: 61  # Big enough to reach episode end (xN). +1 to log last episode
+  eval_samples: 1  # no multi-sampling to have reproducible paper results
+  eval_batch_size: 32  # Limited by GPU mem
+  eval_save_size: 1  # How many envs to save in npz
+
+  # Model
+  model: dreamer
+  deter_dim: 2048
+  stoch_dim: 32
+  stoch_discrete: 32
+  hidden_dim: 1000
+  gru_layers: 1
+  gru_type: gru
+  layer_norm: True
+  vecobs_size: 0
+  image_encoder: cnn
+  cnn_depth: 48
+  image_encoder_layers: 0
+  image_decoder: cnn
+  image_decoder_layers: 0
+  reward_input: False
+  reward_decoder_layers: 4
+  reward_decoder_categorical:
+  terminal_decoder_layers: 4
+  tidy: True
+  
+  # Probe
+  probe_model: none
+  map_decoder: dense
+  map_hidden_layers: 4
+  map_hidden_dim: 1024
+
+  # Actor Critic
+  gamma: 0.995
+  lambda_gae: 0.95
+  entropy: 0.003
+  target_interval: 100
+  imag_horizon: 15
+  actor_grad: reinforce
+  actor_dist: onehot
+
+  # Auxiliary Actor critic
+  aux_critic: False
+  aux_critic_weight: 1.0
+  gamma_aux: 0.99
+  lambda_gae_aux: 0.95
+  target_interval_aux: 1000
+
+  # Generator
+  generator_workers: 8        # train+eval generators
+  generator_workers_train: 0  # train-only generators
+  generator_workers_eval: 0   # eval-only generators
+  generator_prefill_steps: 50_000
+  generator_prefill_policy: random
+  limit_step_ratio: 0
+  env_id:
+  env_id_eval:
+  env_action_repeat: 1
+  env_time_limit: 0
+  env_no_terminal: False
+
+minigrid:
+  env_id: MiniGrid-MazeS11N-v0
+  # Features
+  image_key: image
+  image_size: 7
+  image_channels: 4
+  image_categorical: True
+  map_key: map
+  map_size: 11
+  map_channels: 4
+  map_categorical: True
+  action_dim: 7
+  reward_input: True
+  # Model
+  image_encoder: dense
+  image_encoder_layers: 3
+  image_decoder: dense
+  image_decoder_layers: 2
+  probe_model: map
+  imag_horizon: 1
+
+miniworld:
+  # Env
+  env_id: MiniWorld-ScavengerHuntSmall-v0
+  env_no_terminal: True
+  map_size: 9
+  map_channels: 14
+  action_dim: 3
+  # Features
+  image_key: image
+  image_size: 64
+  image_channels: 3
+  image_categorical: False
+  map_key: map
+  map_categorical: True
+  reward_input: True
+  # Model
+  probe_model: goals
+  cnn_depth: 32
+  data_workers: 6
+
+miniworld_offline:
+  # Env
+  env_id: MiniWorld-ScavengerHuntSmall-v0
+  env_no_terminal: True
+  map_size: 9
+  map_channels: 14
+  action_dim: 3
+  # Features
+  image_key: image
+  image_size: 64
+  image_channels: 3
+  image_categorical: False
+  map_key: map
+  map_categorical: True
+  reward_input: True
+  # Model
+  probe_model: goals
+  cnn_depth: 32
+  data_workers: 6
+  # Offline
+  allow_mid_reset: False
+  reward_decoder_layers: 1  # faster
+  terminal_decoder_layers: 1  # faster
+  imag_horizon: 1  # faster
+
+atari:
+  n_env_steps: 200_000_000
+  # Env
+  env_id: Atari-Pong
+  action_dim: 18
+  env_action_repeat: 4
+  env_time_limit: 27_000  # =108_000/action_repeat = 30 minutes of game play.
+  generator_workers: 1
+  clip_rewards: tanh
+  # Model
+  deter_dim: 1024
+  kl_weight: 0.1
+  gamma: 0.99
+  entropy: 0.001
+
+dmc:
+  env_id: DMC-quadruped_run
+  action_dim: 12
+  env_time_limit: 500  # =1000/action_repeat
+  env_action_repeat: 2
+  generator_workers: 1
+  generator_prefill_steps: 5000
+  entropy: 1.0e-4
+  actor_grad: dynamics
+  actor_dist: tanh_normal
+  clip_rewards: tanh
+
+dmlab:
+  env_id: DmLab-rooms_watermaze
+  action_dim: 15
+  env_action_repeat: 4
+  env_no_terminal: True
+  kl_weight: 3.0
+
+dmmemory:
+  env_id: DMM-spot_diff_passive_train
+  action_dim: 9
+  kl_weight: 3.0
+
+dmlab_offline:
+  env_id: DmLab-rooms_watermaze
+  action_dim: 15
+  env_action_repeat: 4
+  env_no_terminal: True
+  kl_weight: 1.0
+  imag_horizon: 5
+  n_steps: 225_000
+
+vectorenv:
+  env_id: CartPole-v0
+  action_dim: 2
+  vecobs_size: 4
+  image_key:
+  image_encoder:
+  image_decoder:
+
+minecraft:
+  env_id: Embodied-minecraft_diamond
+  action_dim: 29
+  vecobs_size: 27
+  clip_rewards: log1p
+
+memmaze:
+  env_id: memory_maze:MemoryMaze-9x9-v0
+  action_dim: 6
+  entropy: 0.001
+
+procgen:
+  env_id: procgen:procgen-coinrun-v0
+  action_dim: 15
+  kl_weight: 0.1
+
+debug:
+  device: cpu
+  log_interval: 5
+  save_interval: 10
+  data_workers: 0
+  generator_workers: 1
+  generator_prefill_steps: 10_000
+  batch_length: 15
+  batch_size: 5
+  imag_horizon: 3

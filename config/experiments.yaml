@@ -1,0 +1,45 @@
+# -------------------------
+# Atari
+# -------------------------
+
+atari_pong:
+  n_env_steps: 20_000_000
+  env_id: Atari-Pong
+
+atari_breakout:
+  n_env_steps: 100_000_000
+  env_id: Atari-Breakout
+
+atari_montezuma:
+  # n_env_steps: 200_000_000
+  n_env_steps: 20_000_000
+  env_id: Atari-Montezuma_Revenge
+
+atari_spaceinvaders:
+  n_env_steps: 200_000_000
+  env_id: Atari-Space_Invaders
+
+# -------------------------
+# DMC
+# -------------------------
+
+dmc_quadruped_run:
+  env_id: DMC-quadruped_run
+  action_dim: 12
+
+dmc_walker_run:
+  env_id: DMC-walker_run
+  action_dim: 6
+
+dmc_manipulator_bring_peg:
+  env_id: DMC-manipulator_bring_peg
+  action_dim: 5
+
+# -------------------------
+# DMLab
+# -------------------------
+
+dmlab_rooms_select_nonmatching_object:
+  env_id: DmLab-rooms_select_nonmatching_object
+
+
