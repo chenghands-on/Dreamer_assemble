@@ -3,7 +3,7 @@ from typing import Callable, Dict, Tuple
 import numpy as np
 from torch.utils.data import IterableDataset, get_worker_info
 
-from .models.functions import clip_rewards_np
+from .models.math_functions import clip_rewards_np
 from .tools import *
 
 

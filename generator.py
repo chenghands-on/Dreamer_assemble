@@ -16,15 +16,16 @@ import numpy as np
 import torch
 import torch.distributions as D
 
-from pydreamer.data import MlflowEpisodeRepository
+from pydreamer.data import DataSequential,MlflowEpisodeRepository
 from pydreamer.envs import create_env
 from pydreamer.models import *
-from pydreamer.models.functions import map_structure
+from pydreamer.models.math_functions import map_structure
 from pydreamer.preprocessing import Preprocessor
 from pydreamer.tools import *
 
 
-def main(env_id='MiniGrid-MazeS11N-v0',
+def main(conf,
+    env_id='MiniGrid-MazeS11N-v0',
          save_uri=None,
          save_uri2=None,
          worker_id=0,
@@ -44,6 +45,7 @@ def main(env_id='MiniGrid-MazeS11N-v0',
          metrics_prefix='agent',
          metrics_gamma=0.99,
          log_every=10,
+         input_dirs=None
          ):
 
     configure_logging(prefix=f'[GEN {worker_id}]', info_color=LogColorFormatter.GREEN)
@@ -68,18 +70,18 @@ def main(env_id='MiniGrid-MazeS11N-v0',
 
     # Env
 
-    env = create_env(env_id, env_no_terminal, env_time_limit, env_action_repeat, worker_id)
+    env = create_env(env_id, env_no_terminal, env_time_limit, env_action_repeat, worker_id,conf)
 
     # Policy
 
     if num_steps_prefill:
         # Start with prefill policy
         info(f'Prefill policy: {policy_prefill}')
-        policy = create_policy(policy_prefill, env, model_conf)
+        policy = create_policy(policy_prefill, env, model_conf,input_dirs)
         is_prefill_policy = True
     else:
         info(f'Policy: {policy_main}')
-        policy = create_policy(policy_main, env, model_conf)
+        policy = create_policy(policy_main, env, model_conf,input_dirs)
         is_prefill_policy = False
 
     # RUN
@@ -97,7 +99,7 @@ def main(env_id='MiniGrid-MazeS11N-v0',
 
         if is_prefill_policy and steps_saved >= num_steps_prefill:
             info(f'Switching to main policy: {policy_main}')
-            policy = create_policy(policy_main, env, model_conf)
+            policy = create_policy(policy_main, env, model_conf,input_dirs)
             is_prefill_policy = False
 
         # Load network
@@ -259,12 +261,16 @@ def main(env_id='MiniGrid-MazeS11N-v0',
     info('Generator done.')
 
 
-def create_policy(policy_type: str, env, model_conf):
+def create_policy(policy_type: str, env, model_conf,input_dirs):
     if policy_type == 'network':
         conf = model_conf
         if conf.model == 'dreamer':
-            step=1 ## step is useless when interacting with enviroment. It is only useful when training
-            model = Dreamer(conf,step)
+            data_train_stats = DataSequential(MlflowEpisodeRepository(input_dirs), conf.batch_length, conf.batch_size, check_nonempty=False)
+            current_steps=data_train_stats.stats_steps
+            obs_space=env.observation_space
+            act_space=env.action_space
+            ## xch:step is useless when interacting with enviroment. It is only useful when training
+            model = Dreamer_agent(conf,obs_space,act_space,current_steps)
         else:
             assert False, conf.model
         preprocess = Preprocessor(image_categorical=conf.image_channels if conf.image_categorical else None,
@@ -310,7 +316,7 @@ class RandomPolicy:
 
 
 class NetworkPolicy:
-    def __init__(self, model: Dreamer, preprocess: Preprocessor):
+    def __init__(self, model: Dreamer_agent, preprocess: Preprocessor):
         self.model = model
         self.preprocess = preprocess
         self.state = model.init_state(1)
@@ -320,6 +326,7 @@ class NetworkPolicy:
         obs_model: Dict[str, Tensor] = map_structure(batch, torch.from_numpy)  # type: ignore
 
         with torch.no_grad():
+            #这里给出了数据的来源。
             action_distr, new_state, metrics = self.model.inference(obs_model, self.state)
             action = action_distr.sample()
             self.state = new_state

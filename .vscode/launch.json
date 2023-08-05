@@ -6,7 +6,6 @@
     "configurations": [
 
 
-
         {
             "name": "Python: Current File",
             "type": "python",
@@ -14,15 +13,15 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "justMyCode": true,
-            // "args": ["--configs", "defaults", "atari", "atari_pong", "--generator_prefill_steps", "2000", "--wm_type", "v3"]
-            "args": [
-                "--configs", 
-                "atari100k", 
-                // "--task", 
-                // "atari_pong", 
-                "--logdir", 
-                "./logdir/dmc_walker_walk"
-            ]
+            "args": ["--configs", "defaults_wis_v3", "atari", "atari_pong", "--generator_prefill_steps", "1000", "--wm_type", "v3"],
+            // "args": [
+            //     "--configs", 
+            //     "atari100k", 
+            //     // "--task", 
+            //     // "atari_pong", 
+            //     "--logdir", 
+            //     "./logdir/dmc_walker_walk"
+            // ]
         }
     ]
 }

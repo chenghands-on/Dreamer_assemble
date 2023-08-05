@@ -16,13 +16,12 @@ from torch.utils.data import DataLoader
 from pydreamer import tools
 from pydreamer.data import DataSequential, MlflowEpisodeRepository
 from pydreamer.models import *
-from pydreamer.models.functions import map_structure, nanmean
+from pydreamer.models.math_functions import map_structure, nanmean
 from pydreamer.preprocessing import Preprocessor, WorkerInfoPreprocess
 from pydreamer.tools import *
+from pydreamer.models import tools_v3
 
-
-def run(conf):
-    
+def run(conf,space):
     configure_logging(prefix='[TRAIN]')
     mlrun = mlflow_init()
     artifact_uri = mlrun.info.artifact_uri
@@ -30,6 +29,10 @@ def run(conf):
     torch.distributions.Distribution.set_default_validate_args(False)
     torch.backends.cudnn.benchmark = True  # type: ignore
     device = torch.device(conf.device)
+    
+    #Basic env
+    obs_space=space["obs"]
+    act_space=space["act"]
     
     # Data directories
 
@@ -82,7 +85,7 @@ def run(conf):
             return
 
     # Data reader
-
+    
     data = DataSequential(MlflowEpisodeRepository(input_dirs),
                           conf.batch_length,
                           conf.batch_size,
@@ -102,9 +105,9 @@ def run(conf):
     # MODEL
 
     if conf.model == 'dreamer':
-        model = Dreamer(conf, data_train_stats.stats_steps)
+        model = Dreamer_agent(conf,obs_space,act_space,data_train_stats.stats_steps)
     else:
-        model: Dreamer = WorldModelProbe(conf)  # type: ignore
+        model: Dreamer_agent = WorldModelProbe(conf)  # type: ignore
     model.to(device)
     print(model)
     # print(repr(model))
@@ -202,8 +205,14 @@ def run(conf):
                     # Metrics
 
                     for k, v in loss_metrics.items():
-                        if not np.isnan(v.item()):
-                            metrics[k].append(v.item())
+                        if isinstance(v, (np.ndarray, torch.Tensor)):
+                            # 如果 v 是数组或张量，则提取单个值
+                            value = v.item()
+                        else:
+                            # 否则，假设 v 已经是一个数值
+                            value = v
+                        if not np.isnan(value):
+                            metrics[k].append(value)
                     for k, v in grad_metrics.items():
                         if np.isfinite(v.item()):  # It's ok for grad norm to be inf, when using amp
                             metrics[k].append(v.item())
@@ -305,7 +314,7 @@ def run(conf):
 
 def evaluate(prefix: str,
              steps: int,
-             model: Dreamer,
+             model: Dreamer_agent,
              data_iterator: Iterator,
              device,
              eval_batches: int,
@@ -414,17 +423,30 @@ def log_batch_npz(batch: Dict[str, Tensor],
                   subdir: str):
 
     data = dict(**batch, **tensors)
-    print_once(f'Saving batch {subdir} (input): ', {k: tuple(v.shape) for k, v in data.items()})
+    print_once(f'Saving batch {subdir} (input): ', 
+           {k: tuple(v.shape) if hasattr(v, 'shape') else str(type(v)) for k, v in data.items()})
     data = prepare_batch_npz(data)
-    print_once(f'Saving batch {subdir} (proc.): ', {k: tuple(v.shape) for k, v in data.items()})
+    # print_once(f'Saving batch {subdir} (proc.): ', {k: tuple(v.shape) for k, v in data.items()})
+    print_once(f'Saving batch {subdir} (proc.): ', 
+           {k: tuple(v.shape) if hasattr(v, 'shape') else str(type(v)) for k, v in data.items()})
     tools.mlflow_log_npz(data, filename, subdir, verbose=True)
+   
+
 
 
 def prepare_batch_npz(data: Dict[str, Tensor], take_b=999):
 
     def unpreprocess(key: str, val: Tensor) -> np.ndarray:
-        if take_b < val.shape[1]:
-            val = val[:, :take_b]
+        # if take_b < val.shape[1]:
+        #     val = val[:, :take_b]
+        try:
+    # 尝试访问 shape 属性
+            if take_b < val.shape[1]:
+                val = val[:, :take_b]
+        except AttributeError:
+            print(f"Object of type {type(val)} doesn't have a 'shape' attribute.",val,key)
+            # 可以选择在这里抛出错误，或者让程序继续执行
+            raise
 
         x = val.cpu().numpy()  # (T,B,*)
         if x.dtype in [np.float16, np.float64]:

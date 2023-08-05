@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader
 from pydreamer import tools
 from pydreamer.data import DataSequential, MlflowEpisodeRepository
 from pydreamer.models import *
-from pydreamer.models.functions import map_structure, nanmean
+from pydreamer.models.math_functions import map_structure, nanmean
 from pydreamer.preprocessing import Preprocessor, WorkerInfoPreprocess
 from pydreamer.tools import *
 from make_gif import make_gif_wm

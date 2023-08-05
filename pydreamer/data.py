@@ -13,7 +13,7 @@ from mlflow.store.artifact.artifact_repository_registry import \
     get_artifact_repository
 from torch.utils.data import IterableDataset, get_worker_info
 
-from .models.functions import *
+from .models.math_functions import *
 from .tools import *
 
 

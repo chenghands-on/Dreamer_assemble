@@ -5,12 +5,12 @@ import torch.distributions as D
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .a2c import *
-from .common import *
-from .functions import *
-from .decoders import *
-from .rnn import *
-from .rssm import *
+from .actorcritic import *
+from .networks.common import *
+from .math_functions import *
+from .networks.decoders import *
+from .networks.rssm_component import *
+from .networks.rssm import *
 
 class MapGoalsProbe(nn.Module):
     """Combined MapProbeHead and GoalsProbe."""

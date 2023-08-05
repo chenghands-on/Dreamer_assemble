@@ -1,13 +1,14 @@
-defaults_test:
+defaults:
   # Job
-  n_steps: 100_000_000
-  n_env_steps: 1_000_000_000
+  n_steps: 1_000_000
+  n_env_steps: 10_000_000
   offline_data_dir:
   offline_prefill_dir:
   offline_test_dir:
   offline_eval_dir:
   log_interval: 100
-  logbatch_interval: 1000
+  # logbatch_interval: 1000
+  logbatch_interval: 2000
   save_interval: 500
   eval_interval: 2000
   data_workers: 4
@@ -33,8 +34,7 @@ defaults_test:
   # Training
   buffer_size: 10_000_000
   buffer_size_offline: 0
-  # reset_interval: 200
-  reset_interval: 2000
+  reset_interval: 200
   iwae_samples: 1
   kl_balance: 0.8
   kl_weight: 1.0
@@ -47,17 +47,19 @@ defaults_test:
   adam_lr_critic: 1.0e-4
   adam_eps: 1.0e-5
   keep_state: True
-  batch_length: 480
-  # batch_size: 4
-  batch_size: 2
-  # device: "cuda:0"
-  device: "cuda:2"
-  # device: cpu
+  batch_length: 48
+  batch_size: 32
+  device: "cuda:1"
   grad_clip: 200
   grad_clip_ac: 200
   image_decoder_min_prob: 0
   amp: False  # AMP no longer helps on A100
   probe_gradients: False  # for baselines
+
+  ## new para for v3
+  dyn_scale: '0.5'
+  rep_scale: '0.1'
+  kl_free: '1.0'
 
   # Eval
   test_batches: 61  # For unbiased test needs to be enough to cover full episodes
@@ -70,6 +72,7 @@ defaults_test:
 
   # Model
   model: dreamer
+  wm_type: v2
   deter_dim: 2048
   stoch_dim: 32
   stoch_discrete: 32
@@ -87,7 +90,8 @@ defaults_test:
   reward_decoder_layers: 4
   reward_decoder_categorical:
   terminal_decoder_layers: 4
-  tidy: True
+  tidy: False
+  
   
   # Probe
   probe_model: none

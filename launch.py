@@ -6,13 +6,17 @@ from logging import info
 from distutils.util import strtobool
 from multiprocessing import Process
 from typing import List
-
+from pydreamer.tools import *
+from pydreamer.data import DataSequential, MlflowEpisodeRepository
 import generator
 import train
-from pydreamer.tools import (configure_logging, mlflow_log_params,
+# from pydreamer.models import dreamer
+from pydreamer.tools import (configure_logging, mlflow_log_params,mlflow_log_text,
                              mlflow_init, print_once, read_yamls)
+from pydreamer import envs
+from pydreamer.envs.__init__ import create_env
 
-
+os.environ["MUJOCO_GL"]='egl'
 def launch():
     configure_logging('[launcher]')
     parser = argparse.ArgumentParser()
@@ -47,10 +51,46 @@ def launch():
     mlrun = mlflow_init(wait_for_resume=not is_main_worker)
     artifact_uri = mlrun.info.artifact_uri
     mlflow_log_params(vars(conf))
+    
+    # What env do you want? Basic env-info
+    obs_space,act_space= create_env(conf.env_id, conf.env_no_terminal, conf.env_time_limit, conf.env_action_repeat, 0,conf=conf,info_only=True)
+    space={}
+    space["obs"]=obs_space
+    space["act"]=act_space
+    
+    # To know the num of steps, generator should know Data directories
 
+    if conf.offline_data_dir:
+        online_data = False
+        input_dirs = to_list(conf.offline_data_dir)
+    else:
+        online_data = True
+        input_dirs = [
+            f'{artifact_uri}/episodes/{i}'
+            for i in range(max(conf.generator_workers_train, conf.generator_workers))
+        ]
+    
+    if conf.offline_prefill_dir:
+        input_dirs.extend(to_list(conf.offline_prefill_dir))
+
+    # if conf.offline_eval_dir:
+    #     eval_dirs = to_list(conf.offline_eval_dir)
+    # else:
+    #     eval_dirs = [
+    #         f'{artifact_uri}/episodes_eval/{i}'
+    #         for i in range(max(conf.generator_workers_eval, conf.generator_workers))
+    #     ]
+
+    # if conf.offline_test_dir:
+    #     test_dirs = to_list(conf.offline_test_dir)
+    # else:
+    #     test_dirs = eval_dirs
+        
+    
+    
     # Launch train+eval generators
     ## I don't know why, but we should do it by hand
-    conf.generator_workers=2
+    conf.generator_workers=1
     subprocesses: List[Process] = []
     for i in range(conf.generator_workers):
         print('--------generator number--------------')
@@ -69,6 +109,7 @@ def launch():
                 policy_prefill=conf.generator_prefill_policy,
                 num_steps_prefill=conf.generator_prefill_steps // conf.generator_workers,
                 split_fraction=0.05,
+                input_dirs=input_dirs,
             )
             subprocesses.append(p)
 
@@ -109,7 +150,7 @@ def launch():
 
     if belongs_to_worker('learner', 0):
         info('Launching learner')
-        p = launch_learner(conf)
+        p = launch_learner(conf,space)
         subprocesses.append(p)
 
     # Wait & watch
@@ -123,8 +164,8 @@ def launch():
             p.kill()  # Non-daemon processes (learner) need to be killed
 
 
-def launch_learner(conf):
-    p = Process(target=train.run, daemon=False, args=[conf])
+def launch_learner(conf,space):
+    p = Process(target=train.run, daemon=False, args=[conf,space])
     p.start()
     return p
 
@@ -142,10 +183,12 @@ def launch_generator(env_id,
                      split_fraction=0.0,
                      metrics_prefix='agent',
                      log_mlflow_metrics=True,
+                     input_dirs=None,
                      ):
     p = Process(target=generator.main,
                 daemon=True,
                 kwargs=dict(
+                    conf=conf,
                     env_id=env_id,
                     save_uri=save_uri,
                     save_uri2=save_uri2,
@@ -163,6 +206,7 @@ def launch_generator(env_id,
                     split_fraction=split_fraction,
                     metrics_prefix=metrics_prefix,
                     metrics_gamma=conf.gamma,
+                    input_dirs=input_dirs
                 ))
     p.start()
     return p

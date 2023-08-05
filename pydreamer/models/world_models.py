@@ -6,24 +6,24 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..tools import *
-from .a2c import *
-from .common import *
-from .functions import *
-from .encoders import *
-from .decoders import *
-from .rnn import *
-from .rssm import *
+from .actorcritic import *
+from .networks.common import *
+from .math_functions import *
+from .networks.encoders import *
+from .networks.decoders import *
+from .networks.rssm_component import *
+from .networks.rssm import *
 # from .rssm_simplified import RSSMCore, RSSMCell
 from .probes import *
-from .tools_v3 import *
+from . import tools_v3
 from .networks import *
 
 
 class WorldModel_v2(nn.Module):
 
-    def __init__(self, conf,step,obs_space):
+    def __init__(self, obs_space,conf):
         super().__init__()
-
+        shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
         self.deter_dim = conf.deter_dim
         self.stoch_dim = conf.stoch_dim
         self.stoch_discrete = conf.stoch_discrete
@@ -42,7 +42,7 @@ class WorldModel_v2(nn.Module):
         #     self.rep_scale=conf.rep_scale
         # Encoder
 
-        self.encoder = MultiEncoder(conf)
+        self.encoder = MultiEncoder_v2(shapes,conf)
         
         # RSSM
 
@@ -61,13 +61,13 @@ class WorldModel_v2(nn.Module):
         # Decoders for image,rewards and cont
 
         features_dim = conf.deter_dim + conf.stoch_dim * (conf.stoch_discrete or 1)
-        self.decoder = MultiDecoder(features_dim, conf)
+        self.decoder = MultiDecoder_v2(features_dim, conf)
         
         
         # Auxiliary critic
 
         if conf.aux_critic:
-            self.ac_aux = ActorCritic(in_dim=features_dim,
+            self.ac_aux = ActorCritic_v2(in_dim=features_dim,
                                       out_actions=conf.action_dim,
                                       layer_norm=conf.layer_norm,
                                       gamma=conf.gamma_aux,
@@ -208,119 +208,137 @@ class WorldModel_v2(nn.Module):
     
     
 class WorldModel_v3(nn.Module):
-    def __init__(self, obs_space, act_space, step, config):
+    def __init__(self, obs_space, act_space, step, conf):
         super(WorldModel_v3, self).__init__()
         self._step = step
-        self._use_amp = True if config.precision == 16 else False
-        self._config = config
+        self._use_amp = True if conf.precision == 16 else False
+        self._conf = conf
         shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
         # Encoder
-        self.encoder = networks.MultiEncoder(shapes, **config.encoder)
+        self.encoder = MultiEncoder_v3(shapes, conf)
         
         # RSSM
-        self.embed_size = self.encoder.outdim
-        self.dynamics = networks.RSSM(
-            config.dyn_stoch,
-            config.dyn_deter,
-            config.dyn_hidden,
-            config.dyn_input_layers,
-            config.dyn_output_layers,
-            config.dyn_rec_depth,
-            config.dyn_shared,
-            config.dyn_discrete,
-            config.act,
-            config.norm,
-            config.dyn_mean_act,
-            config.dyn_std_act,
-            config.dyn_temp_post,
-            config.dyn_min_std,
-            config.dyn_cell,
-            config.unimix_ratio,
-            config.initial,
-            config.num_actions,
+        self.embed_size = self.encoder.out_dim
+        self.dynamics = RSSM(
+            conf.dyn_stoch,
+            conf.dyn_deter,
+            conf.dyn_hidden,
+            conf.dyn_input_layers,
+            conf.dyn_output_layers,
+            conf.dyn_rec_depth,
+            conf.dyn_shared,
+            conf.dyn_discrete,
+            conf.act,
+            conf.norm,
+            conf.dyn_mean_act,
+            conf.dyn_std_act,
+            conf.dyn_temp_post,
+            conf.dyn_min_std,
+            conf.dyn_cell,
+            conf.unimix_ratio,
+            conf.initial,
+            #为啥原文件里没有这个
+            # conf.num_actions,
+            conf.action_dim,
             self.embed_size,
-            config.device,
+            conf.device,
         )
         # dECODERS FOR IMAGE,REWARDS and counts
         self.heads = nn.ModuleDict()
-        if config.dyn_discrete:
-            feat_size = config.dyn_stoch * config.dyn_discrete + config.dyn_deter
+        if conf.dyn_discrete:
+            feat_size = conf.dyn_stoch * conf.dyn_discrete + conf.dyn_deter
         else:
-            feat_size = config.dyn_stoch + config.dyn_deter
-        self.heads["decoder"] = networks.MultiDecoder(
-            feat_size, shapes, **config.decoder
+            feat_size = conf.dyn_stoch + conf.dyn_deter
+        self.heads["decoder"] = MultiDecoder_v3(
+            feat_size, shapes, **conf.decoder
         )
-        if config.reward_head == "symlog_disc":
-            self.heads["reward"] = networks.MLP(
+        if conf.reward_head == "symlog_disc":
+            self.heads["reward"] = MLP_v3(
                 feat_size,  # pytorch version
                 (255,),
-                config.reward_layers,
-                config.units,
-                config.act,
-                config.norm,
-                dist=config.reward_head,
+                conf.reward_layers,
+                conf.units,
+                conf.act,
+                conf.norm,
+                dist=conf.reward_head,
                 outscale=0.0,
-                device=config.device,
+                device=conf.device,
             )
         else:
-            self.heads["reward"] = networks.MLP(
+            self.heads["reward"] = MLP_v3(
                 feat_size,  # pytorch version
                 [],
-                config.reward_layers,
-                config.units,
-                config.act,
-                config.norm,
-                dist=config.reward_head,
+                conf.reward_layers,
+                conf.units,
+                conf.act,
+                conf.norm,
+                dist=conf.reward_head,
                 outscale=0.0,
-                device=config.device,
+                device=conf.device,
             )
-        self.heads["cont"] = networks.MLP(
+        self.heads["cont"] = MLP_v3(
             feat_size,  # pytorch version
             [],
-            config.cont_layers,
-            config.units,
-            config.act,
-            config.norm,
+            conf.cont_layers,
+            conf.units,
+            conf.act,
+            conf.norm,
             dist="binary",
-            device=config.device,
+            device=conf.device,
         )
-        for name in config.grad_heads:
+        for name in conf.grad_heads:
             assert name in self.heads, name
-        self._model_opt = tools.Optimizer(
-            "model",
-            self.parameters(),
-            config.model_lr,
-            config.opt_eps,
-            config.grad_clip,
-            config.weight_decay,
-            opt=config.opt,
-            use_amp=self._use_amp,
-        )
-        self._scales = dict(reward=config.reward_scale, cont=config.cont_scale)
+        # self._model_opt = tools_v3.Optimizer(
+        #     "model",
+        #     self.parameters(),
+        #     conf.model_lr,
+        #     conf.opt_eps,
+        #     conf.grad_clip,
+        #     conf.weight_decay,
+        #     opt=conf.opt,
+        #     use_amp=self._use_amp,
+        # )
+        self._scales = dict(reward=conf.reward_scale, cont=conf.cont_scale)
+        
+    def init_state(self, batch_size: int) -> Tuple[Any, Any]:
+        return self.dynamics.init_state(batch_size)
+    
+    def forward(self,
+                obs: Dict[str, Tensor],
+                in_state: Any
+                ):
+        model_loss,feat, post, context, metrics,tensors= \
+            self.training_step(obs, in_state, forward_only=True)
+        out_state={key: tensor[-1] for key, tensor in post.items()}
+        return feat, out_state
 
-    def training_step(self, data,do_image_pred=False):
+    def training_step(self, data,do_image_pred=False,forward_only=False):
         # action (batch_size, batch_length, act_dim)
         # image (batch_size, batch_length, h, w, ch)
         # reward (batch_size, batch_length)
         # discount (batch_size, batch_length)
         data = self.preprocess(data)
 
-        with tools.RequiresGrad(self):
+        with tools_v3.RequiresGrad(self):
             with torch.cuda.amp.autocast(self._use_amp):
                 embed = self.encoder(data)
                 post, prior = self.dynamics.observe(
-                    embed, data["action"], data["is_first"]
+                    embed, data["action"], data["reset"]
                 )
-                kl_free = tools.schedule(self._config.kl_free, self._step)
-                dyn_scale = tools.schedule(self._config.dyn_scale, self._step)
-                rep_scale = tools.schedule(self._config.rep_scale, self._step)
+                if forward_only:
+                    post = {k: v.detach() for k, v in post.items()}
+                    feat=self.dynamics.to_feature(post)
+                    return torch.tensor(0.0), feat, post, {}, {}
+                kl_free = tools_v3.schedule(self._conf.kl_free, self._step)
+                dyn_scale = tools_v3.schedule(self._conf.dyn_scale, self._step)
+                rep_scale = tools_v3.schedule(self._conf.rep_scale, self._step)
                 kl_loss, kl_value, dyn_loss, rep_loss = self.dynamics.kl_loss(
                     post, prior, kl_free, dyn_scale, rep_scale
                 )
                 preds = {}
                 for name, head in self.heads.items():
-                    grad_head = name in self._config.grad_heads
-                    feat = self.dynamics.get_feat(post)
+                    grad_head = name in self._conf.grad_heads
+                    feat = self.dynamics.to_feature(post)
                     feat = feat if grad_head else feat.detach()
                     pred = head(feat)
                     if type(pred) is dict:
@@ -335,7 +353,7 @@ class WorldModel_v3(nn.Module):
         #     metrics = self._model_opt(model_loss, self.parameters())
         tensors = {}
         metrics = {}
-        metrics["model_loss"] = model_loss.detach().cpu().numpy()
+        metrics["loss_model"] = model_loss.detach().cpu().numpy()
         metrics.update({f"{name}_loss": to_np(loss) for name, loss in losses.items()})
         metrics["kl_free"] = kl_free
         metrics["dyn_scale"] = dyn_scale
@@ -352,12 +370,12 @@ class WorldModel_v3(nn.Module):
             )
             context = dict(
                 embed=embed,
-                feat=self.dynamics.get_feat(post),
+                feat=self.dynamics.to_feature(post),
                 kl=kl_value,
                 postent=self.dynamics.get_dist(post).entropy(),
             )
         post = {k: v.detach() for k, v in post.items()}
-        feat=self.dynamics.get_feat(post)
+        feat=self.dynamics.to_feature(post)
         
         # Predictions
         if do_image_pred:
@@ -370,42 +388,44 @@ class WorldModel_v3(nn.Module):
         # (batch_size, batch_length) -> (batch_size, batch_length, 1)
         obs["reward"] = torch.Tensor(obs["reward"]).unsqueeze(-1)
         if "discount" in obs:
-            obs["discount"] *= self._config.discount
+            obs["discount"] *= self._conf.discount
             # (batch_size, batch_length) -> (batch_size, batch_length, 1)
             obs["discount"] = torch.Tensor(obs["discount"]).unsqueeze(-1)
-        if "is_terminal" in obs:
+        if "terminal" in obs:
             # this label is necessary to train cont_head
-            obs["cont"] = torch.Tensor(1.0 - obs["is_terminal"]).unsqueeze(-1)
+            obs["cont"] = torch.Tensor(1.0 - obs["terminal"]).unsqueeze(-1)
         else:
-            raise ValueError('"is_terminal" was not found in observation.')
-        obs = {k: torch.Tensor(v).to(self._config.device) for k, v in obs.items()}
+            raise ValueError('"terminal" was not found in observation.')
+        obs = {k: torch.Tensor(v).to(self._conf.device) for k, v in obs.items()}
         return obs
 
     def video_pred(self, data):
         data = self.preprocess(data)
         embed = self.encoder(data)
-
         states, _ = self.dynamics.observe(
-            embed[:6, :5], data["action"][:6, :5], data["is_first"][:6, :5]
+            embed[:5, :6], data["action"][:5, :6], data["reset"][:5, :6]
         )
-        recon = self.heads["decoder"](self.dynamics.get_feat(states))["image"].mode()[
-            :6
+        recon = self.heads["decoder"](self.dynamics.to_feature(states))["image"].mode()[
+            :5
         ]
-        reward_post = self.heads["reward"](self.dynamics.get_feat(states)).mode()[:6]
-        init = {k: v[:, -1] for k, v in states.items()}
-        prior = self.dynamics.imagine(data["action"][:6, 5:], init)
-        openl = self.heads["decoder"](self.dynamics.get_feat(prior))["image"].mode()
-        reward_prior = self.heads["reward"](self.dynamics.get_feat(prior)).mode()
+        reward_post = self.heads["reward"](self.dynamics.to_feature(states)).mode()[:5]
+        # init = {k: v[:, -1] for k, v in states.items()}
+        #init 结构为B*hidden_dim
+        init={k: v[-1,:] for k, v in states.items()}
+        prior = self.dynamics.imagine(data["action"][5:, :6], init)
+        openl = self.heads["decoder"](self.dynamics.to_feature(prior))["image"].mode()
+        reward_prior = self.heads["reward"](self.dynamics.to_feature(prior)).mode()
         # observed image is given until 5 steps
-        model = torch.cat([recon[:, :5], openl], 1)
-        truth = data["image"][:6] + 0.5
+        model = torch.cat([recon[:5, :6], openl], 0)
+        truth = data["image"][:,:6] + 0.5
         # model = model + 0.5
         error = (model - truth + 1.0) / 2.0
         
         tensors={}
-        tensors.update(data)
-        tensors["img_dream"]=model
-        tensors["error"]=error
+        # train 中已有函数保存original data了
+        # tensors.update(data)
+        tensors["image_dream"]=model
+        tensors["image_error"]=error
         
 
         # return torch.cat([truth, model, error], 2)

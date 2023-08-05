@@ -149,18 +149,18 @@ class RSSM(nn.Module):
         else:
             raise NotImplementedError(self._initial)
 
-    def observe(self, embed, action, is_first, state=None):
+    def observe(self, embed, action, reset, state=None):
         swap = lambda x: x.permute([1, 0] + list(range(2, len(x.shape))))
         if state is None:
             state = self.initial(action.shape[0])
         # (batch, time, ch) -> (time, batch, ch)
-        embed, action, is_first = swap(embed), swap(action), swap(is_first)
+        embed, action, reset = swap(embed), swap(action), swap(reset)
         # prev_state[0] means selecting posterior of return(posterior, prior) from obs_step
         post, prior = tools.static_scan(
-            lambda prev_state, prev_act, embed, is_first: self.obs_step(
-                prev_state[0], prev_act, embed, is_first
+            lambda prev_state, prev_act, embed, reset: self.obs_step(
+                prev_state[0], prev_act, embed, reset
             ),
-            (action, embed, is_first),
+            (action, embed, reset),
             (state, state),
         )
 
@@ -201,22 +201,22 @@ class RSSM(nn.Module):
             )
         return dist
 
-    def obs_step(self, prev_state, prev_action, embed, is_first, sample=True):
+    def obs_step(self, prev_state, prev_action, embed, reset, sample=True):
         # if shared is True, prior and post both use same networks(inp_layers, _img_out_layers, _ims_stat_layer)
         # otherwise, post use different network(_obs_out_layers) with prior[deter] and embed as inputs
         prev_action *= (1.0 / torch.clip(torch.abs(prev_action), min=1.0)).detach()
 
-        if torch.sum(is_first) > 0:
-            is_first = is_first[:, None]
-            prev_action *= 1.0 - is_first
-            init_state = self.initial(len(is_first))
+        if torch.sum(reset) > 0:
+            reset = reset[:, None]
+            prev_action *= 1.0 - reset
+            init_state = self.initial(len(reset))
             for key, val in prev_state.items():
-                is_first_r = torch.reshape(
-                    is_first,
-                    is_first.shape + (1,) * (len(val.shape) - len(is_first.shape)),
+                reset_r = torch.reshape(
+                    reset,
+                    reset.shape + (1,) * (len(val.shape) - len(reset.shape)),
                 )
                 prev_state[key] = (
-                    val * (1.0 - is_first_r) + init_state[key] * is_first_r
+                    val * (1.0 - reset_r) + init_state[key] * reset_r
                 )
 
         prior = self.img_step(prev_state, prev_action, None, sample)
@@ -346,7 +346,7 @@ class MultiEncoder(nn.Module):
         symlog_inputs,
     ):
         super(MultiEncoder, self).__init__()
-        excluded = ("is_first", "is_last", "is_terminal", "reward")
+        excluded = ("reset", "is_last", "terminal", "reward")
         shapes = {
             k: v
             for k, v in shapes.items()
@@ -415,7 +415,7 @@ class MultiDecoder(nn.Module):
         vector_dist,
     ):
         super(MultiDecoder, self).__init__()
-        excluded = ("is_first", "is_last", "is_terminal", "reward")
+        excluded = ("reset", "is_last", "terminal", "reward")
         shapes = {k: v for k, v in shapes.items() if k not in excluded}
         self.cnn_shapes = {
             k: v for k, v in shapes.items() if len(v) == 3 and re.match(cnn_keys, k)

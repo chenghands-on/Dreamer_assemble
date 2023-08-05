@@ -3,11 +3,12 @@ import torch
 import torch.nn as nn
 import torch.distributions as D
 
-from .functions import *
+from ..math_functions import *
 from .common import *
+from .. import tools_v3
 
 
-class MultiDecoder(nn.Module):
+class MultiDecoder_v2(nn.Module):
 
     def __init__(self, features_dim, conf):
         super().__init__()
@@ -106,7 +107,89 @@ class MultiDecoder(nn.Module):
             tensors['loss_terminal1'] = loss_terminal1
 
         return loss_reconstr, metrics, tensors
+class MultiDecoder_v3(nn.Module):
+    def __init__(
+        self,
+        feat_size,
+        shapes,
+        mlp_keys,
+        cnn_keys,
+        act,
+        norm,
+        cnn_depth,
+        kernel_size,
+        minres,
+        mlp_layers,
+        mlp_units,
+        cnn_sigmoid,
+        image_dist,
+        vector_dist,
+    ):
+        super(MultiDecoder_v3, self).__init__()
+        excluded = ("reset", "is_last", "terminal", "reward")
+        shapes = {k: v for k, v in shapes.items() if k not in excluded}
+        self.cnn_shapes = {
+            k: v for k, v in shapes.items() if len(v) == 3 and re.match(cnn_keys, k)
+        }
+        self.mlp_shapes = {
+            k: v
+            for k, v in shapes.items()
+            if len(v) in (1, 2) and re.match(mlp_keys, k)
+        }
+        print("Decoder CNN shapes:", self.cnn_shapes)
+        print("Decoder MLP shapes:", self.mlp_shapes)
 
+        if self.cnn_shapes:
+            some_shape = list(self.cnn_shapes.values())[0]
+            shape = (sum(x[-1] for x in self.cnn_shapes.values()),) + some_shape[:-1]
+            self._cnn = ConvDecoder_v3(
+                feat_size,
+                shape,
+                cnn_depth,
+                act,
+                norm,
+                kernel_size,
+                minres,
+                cnn_sigmoid=cnn_sigmoid,
+            )
+        if self.mlp_shapes:
+            self._mlp = MLP_v3(
+                feat_size,
+                self.mlp_shapes,
+                mlp_layers,
+                mlp_units,
+                act,
+                norm,
+                vector_dist,
+            )
+        self._image_dist = image_dist
+
+    def forward(self, features):
+        dists = {}
+        if self.cnn_shapes:
+            feat = features
+            outputs = self._cnn(feat)
+            split_sizes = [v[-1] for v in self.cnn_shapes.values()]
+            # outputs = torch.split(outputs, split_sizes, -1)
+            outputs = torch.split(outputs, split_sizes, -3)
+            dists.update(
+                {
+                    key: self._make_image_dist(output)
+                    for key, output in zip(self.cnn_shapes.keys(), outputs)
+                }
+            )
+        if self.mlp_shapes:
+            dists.update(self._mlp(features))
+        return dists
+
+    def _make_image_dist(self, mean):
+        if self._image_dist == "normal":
+            return tools_v3.ContDist(
+                torchd.independent.Independent(torchd.normal.Normal(mean, 1), 3)
+            )
+        if self._image_dist == "mse":
+            return tools_v3.MSEDist(mean)
+        raise NotImplementedError(self._image_dist)
 
 class ConvDecoder(nn.Module):
 
@@ -178,6 +261,91 @@ class ConvDecoder(nn.Module):
 
         assert len(loss_tbi.shape) == 3 and len(decoded.shape) == 5
         return loss_tbi, loss_tb, decoded
+class ConvDecoder_v3(nn.Module):
+    def __init__(
+        self,
+        feat_size,
+        shape=(3, 64, 64),
+        depth=32,
+        act=nn.ELU,
+        norm=nn.LayerNorm,
+        kernel_size=4,
+        minres=4,
+        outscale=1.0,
+        cnn_sigmoid=False,
+    ):
+        super(ConvDecoder_v3, self).__init__()
+        act = getattr(torch.nn, act)
+        norm = getattr(torch.nn, norm)
+        self._shape = shape
+        self._cnn_sigmoid = cnn_sigmoid
+        layer_num = int(np.log2(shape[1]) - np.log2(minres))
+        self._minres = minres
+        self._embed_size = minres**2 * depth * 2 ** (layer_num - 1)
+
+        self._linear_layer = nn.Linear(feat_size, self._embed_size)
+        self._linear_layer.apply(tools_v3.weight_init)
+        in_dim = self._embed_size // (minres**2)
+
+        layers = []
+        h, w = minres, minres
+        for i in range(layer_num):
+            out_dim = self._embed_size // (minres**2) // (2 ** (i + 1))
+            bias = False
+            initializer = tools_v3.weight_init
+            if i == layer_num - 1:
+                out_dim = self._shape[0]
+                act = False
+                bias = True
+                norm = False
+                initializer = tools_v3.uniform_weight_init(outscale)
+
+            if i != 0:
+                in_dim = 2 ** (layer_num - (i - 1) - 2) * depth
+            pad_h, outpad_h = self.calc_same_pad(k=kernel_size, s=2, d=1)
+            pad_w, outpad_w = self.calc_same_pad(k=kernel_size, s=2, d=1)
+            layers.append(
+                nn.ConvTranspose2d(
+                    in_dim,
+                    out_dim,
+                    kernel_size,
+                    2,
+                    padding=(pad_h, pad_w),
+                    output_padding=(outpad_h, outpad_w),
+                    bias=bias,
+                )
+            )
+            if norm:
+                layers.append(ChLayerNorm(out_dim))
+            if act:
+                layers.append(act())
+            [m.apply(initializer) for m in layers[-3:]]
+            h, w = h * 2, w * 2
+
+        self.layers = nn.Sequential(*layers)
+
+    def calc_same_pad(self, k, s, d):
+        val = d * (k - 1) - s + 1
+        pad = math.ceil(val / 2)
+        outpad = pad * 2 - val
+        return pad, outpad
+
+    def forward(self, features, dtype=None):
+        x = self._linear_layer(features)
+        # (batch, time, -1) -> (batch * time, h, w, ch)
+        x = x.reshape(
+            [-1, self._minres, self._minres, self._embed_size // self._minres**2]
+        )
+        # (batch, time, -1) -> (batch * time, ch, h, w)
+        x = x.permute(0, 3, 1, 2)
+        x = self.layers(x)
+        # (batch, time, -1) -> (batch * time, ch, h, w) necessary???
+        mean = x.reshape(features.shape[:-1] + self._shape)
+        # (batch * time, ch, h, w) -> (batch * time, h, w, ch)
+        # mean = mean.permute(0, 1, 3, 4, 2)
+        if self._cnn_sigmoid:
+            mean = F.sigmoid(mean) - 0.5
+        return mean
 
 
 class CatImageDecoder(nn.Module):
@@ -258,7 +426,7 @@ class DenseBernoulliDecoder(nn.Module):
 
     def __init__(self, in_dim, hidden_dim=400, hidden_layers=2, layer_norm=True):
         super().__init__()
-        self.model = MLP(in_dim, 1, hidden_dim, hidden_layers, layer_norm)
+        self.model = MLP_v2(in_dim, 1, hidden_dim, hidden_layers, layer_norm)
 
     def forward(self, features: Tensor) -> D.Distribution:
         y = self.model.forward(features)
@@ -288,7 +456,7 @@ class DenseNormalDecoder(nn.Module):
 
     def __init__(self, in_dim, out_dim=1, hidden_dim=400, hidden_layers=2, layer_norm=True, std=0.3989422804):
         super().__init__()
-        self.model = MLP(in_dim, out_dim, hidden_dim, hidden_layers, layer_norm)
+        self.model = MLP_v2(in_dim, out_dim, hidden_dim, hidden_layers, layer_norm)
         self.std = std
         self.out_dim = out_dim
 
@@ -328,7 +496,7 @@ class DenseCategoricalSupportDecoder(nn.Module):
     def __init__(self, in_dim, support=[0.0, 1.0], hidden_dim=400, hidden_layers=2, layer_norm=True):
         assert isinstance(support, (list, np.ndarray))
         super().__init__()
-        self.model = MLP(in_dim, len(support), hidden_dim, hidden_layers, layer_norm)
+        self.model = MLP_v2(in_dim, len(support), hidden_dim, hidden_layers, layer_norm)
         self.support = np.array(support).astype(float)
         self._support = nn.Parameter(torch.tensor(support).to(torch.float), requires_grad=False)
 

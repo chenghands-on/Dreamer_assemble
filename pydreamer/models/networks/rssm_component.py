@@ -67,30 +67,56 @@ class GRUCellStack(nn.Module):
         return torch.cat(output_states, -1)
 
 
-class GRUCell(jit.ScriptModule):
-    """Reproduced regular nn.GRUCell, for reference"""
+# class GRUCell(jit.ScriptModule):
+#     """Reproduced regular nn.GRUCell, for reference"""
 
-    def __init__(self, input_size, hidden_size):
-        super().__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.weight_ih = Parameter(torch.randn(input_size, 3 * hidden_size))
-        self.weight_hh = Parameter(torch.randn(hidden_size, 3 * hidden_size))
-        self.bias_ih = Parameter(torch.randn(3 * hidden_size))
-        self.bias_hh = Parameter(torch.randn(3 * hidden_size))
+#     def __init__(self, input_size, hidden_size):
+#         super().__init__()
+#         self.input_size = input_size
+#         self.hidden_size = hidden_size
+#         self.weight_ih = Parameter(torch.randn(input_size, 3 * hidden_size))
+#         self.weight_hh = Parameter(torch.randn(hidden_size, 3 * hidden_size))
+#         self.bias_ih = Parameter(torch.randn(3 * hidden_size))
+#         self.bias_hh = Parameter(torch.randn(3 * hidden_size))
 
-    @jit.script_method
-    def forward(self, input: Tensor, state: Tensor) -> Tensor:
-        gates_i = torch.mm(input, self.weight_ih) + self.bias_ih
-        gates_h = torch.mm(state, self.weight_hh) + self.bias_hh
-        reset_i, update_i, newval_i = gates_i.chunk(3, 1)
-        reset_h, update_h, newval_h = gates_h.chunk(3, 1)
-        reset = torch.sigmoid(reset_i + reset_h)
-        update = torch.sigmoid(update_i + update_h)
-        newval = torch.tanh(newval_i + reset * newval_h)
-        h = update * newval + (1 - update) * state
-        return h
+#     @jit.script_method
+#     def forward(self, input: Tensor, state: Tensor) -> Tensor:
+#         gates_i = torch.mm(input, self.weight_ih) + self.bias_ih
+#         gates_h = torch.mm(state, self.weight_hh) + self.bias_hh
+#         reset_i, update_i, newval_i = gates_i.chunk(3, 1)
+#         reset_h, update_h, newval_h = gates_h.chunk(3, 1)
+#         reset = torch.sigmoid(reset_i + reset_h)
+#         update = torch.sigmoid(update_i + update_h)
+#         newval = torch.tanh(newval_i + reset * newval_h)
+#         h = update * newval + (1 - update) * state
+#         return h
+class GRUCell(nn.Module):
+    def __init__(self, inp_size, size, norm=False, act=torch.tanh, update_bias=-1):
+        super(GRUCell, self).__init__()
+        self._inp_size = inp_size
+        self._size = size
+        self._act = act
+        self._norm = norm
+        self._update_bias = update_bias
+        self._layer = nn.Linear(inp_size + size, 3 * size, bias=False)
+        if norm:
+            self._norm = nn.LayerNorm(3 * size, eps=1e-03)
 
+    @property
+    def state_size(self):
+        return self._size
+
+    def forward(self, inputs, state):
+        state = state[0]  # Keras wraps the state in a list.
+        parts = self._layer(torch.cat([inputs, state], -1))
+        if self._norm:
+            parts = self._norm(parts)
+        reset, cand, update = torch.split(parts, [self._size] * 3, -1)
+        reset = torch.sigmoid(reset)
+        cand = self._act(reset * cand)
+        update = torch.sigmoid(update + self._update_bias)
+        output = update * cand + (1 - update) * state
+        return output, [output]
 
 class NormGRUCell(nn.Module):
     def __init__(self, input_size, hidden_size):
