@@ -50,7 +50,7 @@ defaults_wis_v3:
   keep_state: True
   batch_length: 48
   batch_size: 32
-  device: "cuda:1"
+  device: "cuda:0"
   grad_clip: 200
   grad_clip_ac: 200
   image_decoder_min_prob: 0

@@ -56,8 +56,8 @@ class ActorCritic_v2(nn.Module):
         self.critic = MLP_v2(in_dim, 1, hidden_dim, hidden_layers, layer_norm)
         self.critic_target = MLP_v2(in_dim, 1, hidden_dim, hidden_layers, layer_norm)
         ## Here is a change! Orginally false, but I change it to true
-        self.critic_target.requires_grad_(False)
-        # self.critic_target.requires_grad_(True)
+        # self.critic_target.requires_grad_(False)
+        self.critic_target.requires_grad_(True)
         self.train_steps = 0
 
     def forward_actor(self, features: Tensor) -> D.Distribution:
@@ -150,7 +150,7 @@ class ActorCritic_v2(nn.Module):
         policy_entropy = policy_distr.entropy()
         loss_actor = loss_policy - self.entropy_weight * policy_entropy
         loss_actor = (loss_actor * reality_weight).mean()
-        assert (loss_policy.requires_grad and policy_entropy.requires_grad) or not loss_critic.requires_grad
+        assert (loss_policy.requires_grad and loss_policy.requires_grad) or not loss_critic.requires_grad
 
         with torch.no_grad():
             metrics = dict(loss_critic=loss_critic.detach(),
@@ -220,7 +220,7 @@ class ActorCritic_v2(nn.Module):
 
 
 class ActorCritic_v3(nn.Module):
-    def __init__(self, config,world_model,stop_grad_actor=True, reward=None):
+    def __init__(self, config,world_model,device,stop_grad_actor=True, reward=None):
         super(ActorCritic_v3, self).__init__()
         self._use_amp = True if config.precision == 16 else False
         self._config = config
@@ -228,6 +228,7 @@ class ActorCritic_v3(nn.Module):
         self._stop_grad_actor = stop_grad_actor
         self._reward = reward
         self._discrete=config.dyn_discrete
+        self._device=device
         if config.dyn_discrete:
             feat_size = config.dyn_stoch * config.dyn_discrete + config.dyn_deter
         else:
@@ -259,7 +260,7 @@ class ActorCritic_v3(nn.Module):
                 config.norm,
                 config.value_head,
                 outscale=0.0,
-                device=config.device,
+                device=self._device,
             )
         else:
             self.critic = MLP_v3(
@@ -271,7 +272,7 @@ class ActorCritic_v3(nn.Module):
                 config.norm,
                 config.value_head,
                 outscale=0.0,
-                device=config.device,
+                device=self._device,
             )
         if config.slow_value_target:
             self._slow_value = copy.deepcopy(self.critic)
@@ -294,7 +295,7 @@ class ActorCritic_v3(nn.Module):
         #     **kw,
         # )
         if self._config.reward_EMA:
-            self.reward_ema = RewardEMA(device=self._config.device)
+            self.reward_ema = RewardEMA(device=self._device)
 
     def training_step(
         self,
@@ -363,7 +364,7 @@ class ActorCritic_v3(nn.Module):
                 # (time, batch, 1), (time, batch, 1) -> (1,)
                 value_loss = torch.mean(weights[:-1] * value_loss[:, :, None])
 
-        metrics.update(tensorstats(value.mode(), "value"))
+        metrics.update(tensorstats(value.mode(), "policy_value"))
         metrics.update(tensorstats(target, "target"))
         metrics.update(tensorstats(rewards, "imag_reward"))
         if self._config.actor_dist in ["onehot"]:
@@ -374,12 +375,12 @@ class ActorCritic_v3(nn.Module):
             )
         else:
             metrics.update(tensorstats(actions, "actions"))
-        metrics["actor_entropy"] = to_np(torch.mean(actor_ent))
+        metrics["policy_entropy"] = to_np(torch.mean(actor_ent))
         with RequiresGrad(self):
             # metrics.update(self._actor_opt(actor_loss, self.actor.parameters()))
             # metrics.update(self._value_opt(value_loss, self.value.parameters()))
-            metrics["actor_loss"] = actor_loss.detach().cpu().numpy()
-            metrics["value_loss"] = value_loss.detach().cpu().numpy()
+            metrics["loss_actor"] = actor_loss.detach().cpu().numpy()
+            metrics["loss_critic"] = value_loss.detach().cpu().numpy()
         tensors = dict(value=value.mode(),
                         value_weight=weights.detach(),
                         )

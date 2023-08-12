@@ -22,19 +22,23 @@ from .world_models import *
 
 class Dreamer_agent(nn.Module):
 
-    def __init__(self, conf,obs_space,act_space,step):
+    def __init__(self, conf,obs_space,act_space,step,device=None):
         super().__init__()
         assert conf.action_dim > 0, "Need to set action_dim to match environment"
         features_dim = conf.deter_dim + conf.stoch_dim * (conf.stoch_discrete or 1)
         self.iwae_samples = conf.iwae_samples
         self.imag_horizon = conf.imag_horizon
+        if device:
+            self._device=device
+        else:
+            self._device=conf.device
 
         # World model
         self.wm_type=conf.wm_type
         if self.wm_type=='v2':
             self.wm = WorldModel_v2(obs_space,conf)
         elif self.wm_type=='v3':
-            self.wm = WorldModel_v3(obs_space,act_space,step,conf)
+            self.wm = WorldModel_v3(obs_space,act_space,step,conf,self._device)
 
         # Actor critic
         
@@ -50,7 +54,7 @@ class Dreamer_agent(nn.Module):
                               actor_dist=conf.actor_dist,
                               )
         elif self.wm_type=='v3':
-            self.ac=ActorCritic_v3(conf,self.wm)
+            self.ac=ActorCritic_v3(conf,self.wm,self._device)
 
 
         
@@ -114,12 +118,19 @@ class Dreamer_agent(nn.Module):
         features, out_state = self.wm.forward(obs, in_state)
 
         # Forward (actor critic)
-
-        feature = features[:, :, 0]  # (T=1,B,I=1,F) => (1,B,F)
-        action_distr = self.ac.forward_actor(feature)  # (1,B,A)
-        value = self.ac.forward_value(feature)  # (1,B)
-
-        metrics = dict(policy_value=value.detach().mean())
+        if self.wm_type=='v2':
+            
+            feature = features[:, :, 0]  # (T=1,B,I=1,F) => (1,B,F)
+            action_distr=self.ac.forward_actor(feature)
+            value=self.ac.forward_value(feature)
+            metrics = dict(policy_value=value.detach().mean())
+        elif self.wm_type=='v3':
+            feature = features[0, :, :]
+            action_distr = self.ac.actor(feature)  # (1,B,A)
+            value = self.ac.critic(feature)  # (1,B)
+            metrics={}
+            metrics.update(tensorstats(value.mode(), "value"))
+        
         return action_distr, out_state, metrics
 
     def training_step(self,
@@ -401,14 +412,14 @@ class Dreamer_agent(nn.Module):
         elif self.wm_type=='v3':
             rewards=self.wm.heads["reward"](features).mode()
             terminals=self.wm.heads["cont"](features).mode()
-        # 获取字典中的键
-        keys =states[0].keys()
+            # 获取字典中的键
+            keys =states[0].keys()
 
-        # 为每个键堆叠张量
-        states_stack = {key: torch.stack([d[key] for d in states]) for key in keys}
+            # 为每个键堆叠张量
+            states = {key: torch.stack([d[key] for d in states]) for key in keys}
 
         self.wm.requires_grad_(True)
-        return features, actions, rewards, terminals,states_stack
+        return features, actions, rewards, terminals,states
 
     def __str__(self):
         # Short representation

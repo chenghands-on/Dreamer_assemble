@@ -51,8 +51,8 @@ def create_env(env_id: str, no_terminal: bool, env_time_limit: int, env_action_r
             env = wrappers.RestartOnExceptionWrapper(constr)
 
         elif env_id.startswith('DMC-'):
-            from .dmc import DMC
-            env = DMC(env_id.split('-', maxsplit=1)[1].lower(), action_repeat=env_action_repeat)
+            from .dmc import DMC_v2
+            env = DMC_v2(env_id.split('-', maxsplit=1)[1].lower(), action_repeat=env_action_repeat)
         
         elif env_id.startswith('Embodied-'):
             from .embodied import EmbodiedEnv
@@ -79,9 +79,9 @@ def create_env(env_id: str, no_terminal: bool, env_time_limit: int, env_action_r
         suite=suite.lower()
         task=task.lower()
         if suite == "dmc":
-            from .dmc import DMC
+            from .dmc import DMC_v3
 
-            env = dmc.DeepMindControl(task, conf.action_repeat, conf.size)
+            env = DMC_v3(task, conf.action_repeat, conf.size)
             env = wrappers.NormalizeActions(env)
         elif suite == "atari":
             from .atari import Atari_v3

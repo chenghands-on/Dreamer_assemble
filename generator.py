@@ -270,7 +270,7 @@ def create_policy(policy_type: str, env, model_conf,input_dirs):
             obs_space=env.observation_space
             act_space=env.action_space
             ## xch:step is useless when interacting with enviroment. It is only useful when training
-            model = Dreamer_agent(conf,obs_space,act_space,current_steps)
+            model = Dreamer_agent(conf,obs_space,act_space,current_steps,device='cpu')
         else:
             assert False, conf.model
         preprocess = Preprocessor(image_categorical=conf.image_channels if conf.image_categorical else None,

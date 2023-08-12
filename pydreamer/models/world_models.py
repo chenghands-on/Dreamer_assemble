@@ -208,12 +208,13 @@ class WorldModel_v2(nn.Module):
     
     
 class WorldModel_v3(nn.Module):
-    def __init__(self, obs_space, act_space, step, conf):
+    def __init__(self, obs_space, act_space, step, conf,device):
         super(WorldModel_v3, self).__init__()
         self._step = step
         self._use_amp = True if conf.precision == 16 else False
         self._conf = conf
         shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
+        self._device=device
         # Encoder
         self.encoder = MultiEncoder_v3(shapes, conf)
         
@@ -262,7 +263,7 @@ class WorldModel_v3(nn.Module):
                 conf.norm,
                 dist=conf.reward_head,
                 outscale=0.0,
-                device=conf.device,
+                device=self._device,
             )
         else:
             self.heads["reward"] = MLP_v3(
@@ -274,7 +275,7 @@ class WorldModel_v3(nn.Module):
                 conf.norm,
                 dist=conf.reward_head,
                 outscale=0.0,
-                device=conf.device,
+                device=self._device,
             )
         self.heads["cont"] = MLP_v3(
             feat_size,  # pytorch version
@@ -284,7 +285,7 @@ class WorldModel_v3(nn.Module):
             conf.act,
             conf.norm,
             dist="binary",
-            device=conf.device,
+            device=self._device,
         )
         for name in conf.grad_heads:
             assert name in self.heads, name
@@ -307,8 +308,9 @@ class WorldModel_v3(nn.Module):
                 obs: Dict[str, Tensor],
                 in_state: Any
                 ):
+        # TODO:v3好像不需要输入state，一开始h和z都是随机initial的；但是v2需要？
         model_loss,feat, post, context, metrics,tensors= \
-            self.training_step(obs, in_state, forward_only=True)
+            self.training_step(obs, forward_only=True)
         out_state={key: tensor[-1] for key, tensor in post.items()}
         return feat, out_state
 
@@ -317,8 +319,7 @@ class WorldModel_v3(nn.Module):
         # image (batch_size, batch_length, h, w, ch)
         # reward (batch_size, batch_length)
         # discount (batch_size, batch_length)
-        data = self.preprocess(data)
-
+        data = self.preprocess(data,forward_only=True)
         with tools_v3.RequiresGrad(self):
             with torch.cuda.amp.autocast(self._use_amp):
                 embed = self.encoder(data)
@@ -328,7 +329,7 @@ class WorldModel_v3(nn.Module):
                 if forward_only:
                     post = {k: v.detach() for k, v in post.items()}
                     feat=self.dynamics.to_feature(post)
-                    return torch.tensor(0.0), feat, post, {}, {}
+                    return torch.tensor(0.0), feat, post, {}, {},{}
                 kl_free = tools_v3.schedule(self._conf.kl_free, self._step)
                 dyn_scale = tools_v3.schedule(self._conf.dyn_scale, self._step)
                 rep_scale = tools_v3.schedule(self._conf.rep_scale, self._step)
@@ -382,7 +383,7 @@ class WorldModel_v3(nn.Module):
             tensors=self.video_pred(data)
         return model_loss,feat, post, context, metrics,tensors
 
-    def preprocess(self, obs):
+    def preprocess(self, obs,forward_only=False):
         obs = obs.copy()
         obs["image"] = torch.Tensor(obs["image"]) / 255.0 - 0.5
         # (batch_size, batch_length) -> (batch_size, batch_length, 1)
@@ -396,7 +397,8 @@ class WorldModel_v3(nn.Module):
             obs["cont"] = torch.Tensor(1.0 - obs["terminal"]).unsqueeze(-1)
         else:
             raise ValueError('"terminal" was not found in observation.')
-        obs = {k: torch.Tensor(v).to(self._conf.device) for k, v in obs.items()}
+        if not forward_only:
+            obs = {k: torch.Tensor(v).to(self._device) for k, v in obs.items()}
         return obs
 
     def video_pred(self, data):
