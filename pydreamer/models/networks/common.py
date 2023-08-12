@@ -226,16 +226,25 @@ class ActionHead(nn.Module):
         x = features
         x = self._pre_layers(x)
         if self._dist == "tanh_normal":
+            ## We replace original tan_normal with normal code
+            # x = self._dist_layer(x)
+            # # mean, std = torch.split(x, 2, -1)
+            # mean, std = torch.split(x, [self._size] * 2, -1)
+            # mean = torch.tanh(mean)
+            # std = F.softplus(std + self._init_std) + self._min_std
+            # dist = torchd.normal.Normal(mean, std)
+            # dist = torchd.transformed_distribution.TransformedDistribution(
+            #     dist, TanhBijector()
+            # )
+            # dist = torchd.independent.Independent(dist, 1)
+            # dist = SampleDist(dist)
             x = self._dist_layer(x)
-            mean, std = torch.split(x, 2, -1)
-            mean = torch.tanh(mean)
-            std = F.softplus(std + self._init_std) + self._min_std
-            dist = torchd.normal.Normal(mean, std)
-            dist = torchd.transformed_distribution.TransformedDistribution(
-                dist, TanhBijector()
-            )
-            dist = torchd.independent.Independent(dist, 1)
-            dist = SampleDist(dist)
+            mean, std = torch.split(x, [self._size] * 2, -1)
+            std = (self._max_std - self._min_std) * torch.sigmoid(
+                std + 2.0
+            ) + self._min_std
+            dist = torchd.normal.Normal(torch.tanh(mean), std)
+            dist = ContDist(torchd.independent.Independent(dist, 1))
         elif self._dist == "tanh_normal_5":
             x = self._dist_layer(x)
             mean, std = torch.split(x, 2, -1)

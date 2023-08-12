@@ -108,7 +108,7 @@ class DMC_v3:
             assert task is None
             self._env = domain()
         self._action_repeat = action_repeat
-        self._size = size
+        self._size = tuple(size)
         if camera is None:
             camera = dict(quadruped=2).get(domain, 0)
         self._camera = camera

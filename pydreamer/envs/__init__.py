@@ -81,7 +81,7 @@ def create_env(env_id: str, no_terminal: bool, env_time_limit: int, env_action_r
         if suite == "dmc":
             from .dmc import DMC_v3
 
-            env = DMC_v3(task, conf.action_repeat, conf.size)
+            env = DMC_v3(task, env_action_repeat, conf.size)
             env = wrappers.NormalizeActions(env)
         elif suite == "atari":
             from .atari import Atari_v3

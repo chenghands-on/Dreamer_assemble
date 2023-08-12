@@ -90,7 +90,7 @@ def launch():
     
     # Launch train+eval generators
     ## I don't know why, but we should do it by hand
-    conf.generator_workers=1
+    # conf.generator_workers=1
     subprocesses: List[Process] = []
     for i in range(conf.generator_workers):
         print('--------generator number--------------')

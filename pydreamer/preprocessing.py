@@ -89,6 +89,8 @@ class Preprocessor:
         return TransformedDataset(dataset, self.apply)
 
     def apply(self, batch: Dict[str, np.ndarray], expandTB=False) -> Dict[str, np.ndarray]:
+        for k, v in batch.items():
+            batch[k] = np.array(v)
         print_once('Preprocess batch (before): ', {k: v.shape + (v.dtype.name,) for k, v in batch.items()})
 
         # expand

@@ -12,8 +12,8 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "justMyCode": true,
-            "args": ["--configs", "defaults_wis_v3", "dmc", "dmc_walker_run", "--generator_prefill_steps", "1000", "--wm_type", "v2"
-        ,"--save_interval","10"],
+            "args": ["--configs", "defaults_wis_v3", "dmc", "dmc_walker_run", "--generator_prefill_steps", "1000", "--wm_type", "v3"
+        ,"--save_interval","10","--generator_workers","1"],
             // "args": [
             //     "--configs", 
             //     "atari100k", 
