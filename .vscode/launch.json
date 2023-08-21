@@ -4,6 +4,7 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+        
 
         {
             "name": "Python: Current File",
@@ -12,8 +13,8 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "justMyCode": true,
-            "args": ["--configs", "defaults_wis_v3", "dmc", "dmc_walker_run", "--generator_prefill_steps", "1000", "--wm_type", "v3"
-        ,"--save_interval","10","--generator_workers","1"],
+            "args": ["--configs", "defaults_wis_v3","dreamer_v3", "dmc", "dmc_walker_run","--generator_prefill_steps", "2000"
+        ,"--save_interval","20","--generator_workers","1"],
             // "args": [
             //     "--configs", 
             //     "atari100k", 

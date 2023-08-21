@@ -85,7 +85,7 @@ def run(conf,space):
             return
 
     # Data reader
-    
+    amp=True if conf.precision == 16 else False
     data = DataSequential(MlflowEpisodeRepository(input_dirs),
                           conf.batch_length,
                           conf.batch_size,
@@ -100,7 +100,7 @@ def run(conf,space):
                               map_key=conf.map_key,
                               action_dim=conf.action_dim,
                               clip_rewards=conf.clip_rewards,
-                              amp=conf.amp and device.type == 'cuda')
+                              amp=amp and device.type == 'cuda')
 
     # MODEL
 
@@ -113,7 +113,7 @@ def run(conf,space):
     # print(repr(model))
     mlflow_log_text(repr(model), 'architecture.txt')
 
-    optimizers = model.init_optimizers(conf.adam_lr, conf.adam_lr_actor, conf.adam_lr_critic, conf.adam_eps)
+    optimizers = model.init_optimizers(conf.adam_lr, conf.adam_lr_actor, conf.adam_lr_critic, conf.adam_eps,conf.adam_ac_eps)
     resume_step = tools.mlflow_load_checkpoint(model, optimizers)
     if resume_step:
         info(f'Loaded model from checkpoint epoch {resume_step}')
@@ -143,7 +143,7 @@ def run(conf,space):
                                 prefetch_factor=20 if conf.data_workers else 2,  # GCS download has to be shorter than this many batches (e.g. 1sec < 20*300ms)
                                 pin_memory=True))
 
-    scaler = GradScaler(enabled=conf.amp)
+    scaler = GradScaler(enabled=amp)
 
     with get_profiler(conf) as profiler:
         while True:
@@ -166,7 +166,7 @@ def run(conf,space):
                 # Forward
 
                 with timer('forward'):
-                    with autocast(enabled=conf.amp):
+                    with autocast(enabled=amp):
 
                         state = states.get(wid)
                         if state is None:
@@ -358,7 +358,7 @@ def evaluate(prefix: str,
             # Open loop & unseen logprob
 
             if n_continued_episodes > 0:
-                with autocast(enabled=conf.amp):
+                with autocast(enabled=amp):
                     _, _, _, tensors_im, _ = \
                         model.training_step(obs,  # observation will be ignored in forward pass because of imagine=True
                                             state,
@@ -382,7 +382,7 @@ def evaluate(prefix: str,
 
             # Closed loop & loss
 
-            with autocast(enabled=conf.amp):
+            with autocast(enabled=amp):
                 if state is None or not keep_state:
                     state = model.init_state(B * eval_samples)
 

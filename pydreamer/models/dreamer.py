@@ -43,15 +43,7 @@ class Dreamer_agent(nn.Module):
         # Actor critic
         
         if self.wm_type=='v2':
-            self.ac = ActorCritic_v2(in_dim=features_dim,
-                              out_actions=conf.action_dim,
-                              layer_norm=conf.layer_norm,
-                              gamma=conf.gamma,
-                              lambda_gae=conf.lambda_gae,
-                              entropy_weight=conf.entropy,
-                              target_interval=conf.target_interval,
-                              actor_grad=conf.actor_grad,
-                              actor_dist=conf.actor_dist,
+            self.ac = ActorCritic_v2(conf
                               )
         elif self.wm_type=='v3':
             self.ac=ActorCritic_v3(conf,self.wm,self._device)
@@ -60,30 +52,30 @@ class Dreamer_agent(nn.Module):
         
         # Map probe
 
-        if conf.probe_model == 'map':
-            probe_model = MapProbeHead(features_dim + 4, conf)
-        elif conf.probe_model == 'goals':
-            probe_model = GoalsProbe(features_dim, conf)
-        elif conf.probe_model == 'map+goals':
-            probe_model = MapGoalsProbe(features_dim, conf)
-        elif conf.probe_model == 'none':
-            probe_model = NoProbeHead()
-        else:
-            raise NotImplementedError(f'Unknown probe_model={conf.probe_model}')
+        # if conf.probe_model == 'map':
+        #     probe_model = MapProbeHead(features_dim + 4, conf)
+        # elif conf.probe_model == 'goals':
+        #     probe_model = GoalsProbe(features_dim, conf)
+        # elif conf.probe_model == 'map+goals':
+        #     probe_model = MapGoalsProbe(features_dim, conf)
+        # elif conf.probe_model == 'none':
+        probe_model = NoProbeHead()
+        # else:
+        #     raise NotImplementedError(f'Unknown probe_model={conf.probe_model}')
         self.probe_model = probe_model
         self.probe_gradients = conf.probe_gradients
 
-    def init_optimizers(self, lr, lr_actor=None, lr_critic=None, eps=1e-5):
+    def init_optimizers(self, lr, lr_actor=None, lr_critic=None, eps=1e-5,ac_eps=1e-5):
         if not self.probe_gradients:
             optimizer_wm = torch.optim.AdamW(self.wm.parameters(), lr=lr, eps=eps)
             optimizer_probe = torch.optim.AdamW(self.probe_model.parameters(), lr=lr, eps=eps)
-            optimizer_actor = torch.optim.AdamW(self.ac.actor.parameters(), lr=lr_actor or lr, eps=eps)
-            optimizer_critic = torch.optim.AdamW(self.ac.critic.parameters(), lr=lr_critic or lr, eps=eps)
+            optimizer_actor = torch.optim.AdamW(self.ac.actor.parameters(), lr=lr_actor or lr, eps=ac_eps)
+            optimizer_critic = torch.optim.AdamW(self.ac.critic.parameters(), lr=lr_critic or lr, eps=ac_eps)
             return optimizer_wm, optimizer_probe, optimizer_actor, optimizer_critic
         else:
             optimizer_wmprobe = torch.optim.AdamW(self.wm.parameters(), lr=lr, eps=eps)
-            optimizer_actor = torch.optim.AdamW(self.ac.actor.parameters(), lr=lr_actor or lr, eps=eps)
-            optimizer_critic = torch.optim.AdamW(self.ac.critic.parameters(), lr=lr_critic or lr, eps=eps)
+            optimizer_actor = torch.optim.AdamW(self.ac.actor.parameters(), lr=lr_actor or lr, eps=ac_eps)
+            optimizer_critic = torch.optim.AdamW(self.ac.critic.parameters(), lr=lr_critic or lr, eps=ac_eps)
             return optimizer_wmprobe, optimizer_actor, optimizer_critic
 
     def grad_clip(self, grad_clip, grad_clip_ac=None):
@@ -178,7 +170,9 @@ class Dreamer_agent(nn.Module):
             self.dream(in_state_dream, H, self.ac.actor_grad == 'dynamics')  # (H+1,TBI,D)
         elif self.wm_type=='v3':
             states=post
-            in_state_dream={key: tensor[0] for key, tensor in states.items()}
+            flatten = lambda x: x.reshape([-1] + list(x.shape[2:]))
+            in_state_dream = {k: flatten(v) for k, v in states.items()}
+            # in_state_dream={key: tensor[0] for key, tensor in states.items()}
             # in_state_dream=map_structure(states, lambda x: flatten_batch(x.detach())[0])
         # Note features_dream includes the starting "real" features at features_dream[0]
             features_dream, actions_dream, rewards_dream, terminals_dream, states_dream = \
@@ -192,7 +186,7 @@ class Dreamer_agent(nn.Module):
                                     terminals_dream.mean.detach())
             tensors.update(policy_value=unflatten_batch(tensors_ac['value'][0], (T, B, I)).mean(-1))
         elif self.wm_type=="v3":
-             (loss_actor, loss_critic), features, states, actions,metrics_ac, tensors_ac = \
+             (loss_actor, loss_critic), features, actions,metrics_ac, tensors_ac = \
                 self.ac.training_step(features_dream.detach(),
                                     actions_dream.detach(),
                                     rewards_dream.detach(),

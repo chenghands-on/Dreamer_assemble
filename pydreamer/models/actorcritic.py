@@ -29,36 +29,34 @@ class RewardEMA(object):
 class ActorCritic_v2(nn.Module):
 
     def __init__(self,
-                 in_dim,
-                 out_actions,
-                 hidden_dim=400,
-                 hidden_layers=4,
-                 layer_norm=True,
-                 gamma=0.999,
-                 lambda_gae=0.95,
-                 entropy_weight=1e-3,
-                 target_interval=100,
-                 actor_grad='reinforce',
-                 actor_dist='onehot'
+                 conf
                  ):
         super().__init__()
-        self.in_dim = in_dim
-        self.out_actions = out_actions
-        self.gamma = gamma
-        self.lambda_ = lambda_gae
-        self.entropy_weight = entropy_weight
-        self.target_interval = target_interval
-        self.actor_grad = actor_grad
-        self.actor_dist = actor_dist
-
-        actor_out_dim = out_actions if actor_dist == 'onehot' else 2 * out_actions
-        self.actor = MLP_v2(in_dim, actor_out_dim, hidden_dim, hidden_layers, layer_norm)
-        self.critic = MLP_v2(in_dim, 1, hidden_dim, hidden_layers, layer_norm)
-        self.critic_target = MLP_v2(in_dim, 1, hidden_dim, hidden_layers, layer_norm)
-        ## Here is a change! Orginally false, but I change it to true
-        # self.critic_target.requires_grad_(False)
-        self.critic_target.requires_grad_(True)
-        self.train_steps = 0
+        ## feature_dim (h,z)
+        
+        self.action_dim = conf.action_dim
+        self.discount = conf.discount
+        self.lambda_ = conf.lambda_gae
+        self.entropy_weight = conf.actor_entropy
+        self.slow_value_target=conf.slow_value_target
+        self.slow_target_update=conf.slow_target_update
+        self.slow_target_fraction=conf.slow_target_fraction
+        self.actor_grad = conf.actor_grad
+        self.actor_dist = conf.actor_dist
+        actor_out_dim = conf.action_dim if conf.actor_dist == 'onehot' else 2 * conf.action_dim
+        feat_size = conf.deter_dim + conf.stoch_dim * (conf.stoch_discrete or 1)
+        self.feat_size = feat_size
+        hidden_layers=4
+        
+        self.actor = MLP_v2(feat_size, actor_out_dim, conf.hidden_dim, hidden_layers, conf.layer_norm)
+        self.critic = MLP_v2(feat_size, 1,  conf.hidden_dim, hidden_layers, conf.layer_norm)
+        # self.critic_target = MLP_v2(feat_size, 1,  conf.hidden_dim, conf.hidden_layers, conf.layer_norm)
+        # ## Here is a change! Orginally false, but I change it to true
+        # # self.critic_target.requires_grad_(False)
+        # self.critic_target.requires_grad_(True)
+        if conf.slow_value_target:
+            self._slow_value = copy.deepcopy(self.critic)
+            self._updates = 0
 
     def forward_actor(self, features: Tensor) -> D.Distribution:
         y = self.actor.forward(features).float()  # .float() to force float32 on AMP
@@ -94,22 +92,24 @@ class ActorCritic_v2(nn.Module):
             -> actions[H-1] -> rewards[H], terminals[H], features[H]
         """
         if not log_only:
-            if self.train_steps % self.target_interval == 0:
-                self.update_critic_target()
-            self.train_steps += 1
+            # 每轮都更新一点点
+            # if self._updates % self.target_interval == 0:
+                # self.update_critic_target()
+            self._update_slow_target()
+        self._updates += 1
 
         reward1: TensorHM = rewards[1:]
         terminal0: TensorHM = terminals[:-1]
         terminal1: TensorHM = terminals[1:]
 
         # GAE from https://arxiv.org/abs/1506.02438 eq (16)
-        #   advantage_gae[t] = advantage[t] + (gamma lambda) advantage[t+1] + (gamma lambda)^2 advantage[t+2] + ...
+        #   advantage_gae[t] = advantage[t] + (discount lambda) advantage[t+1] + (discount lambda)^2 advantage[t+2] + ...
 
-        value_t: TensorJM = self.critic_target.forward(features)
+        value_t: TensorJM = self._slow_value.forward(features)
         value0t: TensorHM = value_t[:-1]
         value1t: TensorHM = value_t[1:]
-        # TD error=r+\gamma*V(s')-V(s)
-        advantage = - value0t + reward1 + self.gamma * (1.0 - terminal1) * value1t
+        # TD error=r+\discount*V(s')-V(s)
+        advantage = - value0t + reward1 + self.discount * (1.0 - terminal1) * value1t
         advantage_gae = []
         agae = None
         # GAE的累加
@@ -117,11 +117,11 @@ class ActorCritic_v2(nn.Module):
             if agae is None:
                 agae = adv
             else:
-                agae = adv + self.lambda_ * self.gamma * (1.0 - term) * agae
+                agae = adv + self.lambda_ * self.discount * (1.0 - term) * agae
             advantage_gae.append(agae)
         advantage_gae.reverse()
         advantage_gae = torch.stack(advantage_gae)
-        # Note: if lambda=0, then advantage_gae=advantage, then value_target = advantage + value0t = reward + gamma * value1t
+        # Note: if lambda=0, then advantage_gae=advantage, then value_target = advantage + value0t = reward + discount * value1t
         value_target = advantage_gae + value0t
 
         # When calculating losses, should ignore terminal states, or anything after, so:
@@ -143,7 +143,8 @@ class ActorCritic_v2(nn.Module):
             action_logprob = policy_distr.log_prob(actions)
             loss_policy = - action_logprob * advantage_gae.detach()
         elif self.actor_grad == 'dynamics':
-            loss_policy = - value_target
+            # loss_policy = - value_target
+            loss_policy=- advantage_gae
         else:
             assert False, self.actor_grad
 
@@ -170,9 +171,18 @@ class ActorCritic_v2(nn.Module):
 
         return (loss_actor, loss_critic), metrics, tensors
 
-    def update_critic_target(self):
-        self.critic_target.load_state_dict(self.critic.state_dict())  # type: ignore
-
+    # def update_critic_target(self):
+    #     self.critic_target.load_state_dict(self.critic.state_dict())  # type: ignore
+    
+    def _update_slow_target(self):
+        if self.slow_value_target:
+            if self._updates % self.slow_target_update == 0:
+                mix = self.slow_target_fraction
+                for s, d in zip(self.critic.parameters(), self._slow_value.parameters()):
+                    d.data = mix * s.data + (1 - mix) * d.data
+            self._updates += 1
+    
+    
     def adversarial_attack(self, state, epsilon=0.2, iters=10):
         # Note that 'state' should be a PyTorch tensor
         
@@ -324,8 +334,9 @@ class ActorCritic_v3(nn.Module):
                 # )
                 ##这个reward是通过wm送过来的
                 # reward = objective(features, states, actions)
-                actor_ent = self.actor(features).entropy()
+                actor_ent = self.actor(features[:-1]).entropy()
                 # state_ent = self._world_model.dynamics.get_dist(states).entropy()
+                # 暂时没影响，因为这个现在是0
                 state_ent=self.get_dist(states).entropy()
                 # this target is not scaled
                 # slow is flag to indicate whether slow_target is used for lambda-return
@@ -376,15 +387,15 @@ class ActorCritic_v3(nn.Module):
         else:
             metrics.update(tensorstats(actions, "actions"))
         metrics["policy_entropy"] = to_np(torch.mean(actor_ent))
-        with RequiresGrad(self):
+        # with RequiresGrad(self):
             # metrics.update(self._actor_opt(actor_loss, self.actor.parameters()))
             # metrics.update(self._value_opt(value_loss, self.value.parameters()))
-            metrics["loss_actor"] = actor_loss.detach().cpu().numpy()
-            metrics["loss_critic"] = value_loss.detach().cpu().numpy()
+        metrics["loss_actor"] = actor_loss.detach().cpu().numpy()
+        metrics["loss_critic"] = value_loss.detach().cpu().numpy()
         tensors = dict(value=value.mode(),
                         value_weight=weights.detach(),
                         )
-        return (actor_loss,value_loss),features, states, actions, metrics,tensors
+        return (actor_loss,value_loss),features, actions, metrics,tensors
 
     # def _imagine(self, start, policy, horizon, repeats=None):
     #     dynamics = self._world_model.dynamics
@@ -426,22 +437,25 @@ class ActorCritic_v3(nn.Module):
     def _compute_target(
         self, features, states, actions, reward, actor_ent, state_ent
     ):
+        ## discount
         if "cont" in self._world_model.heads:
             inp = self._world_model.dynamics.to_feature(states)
             discount = self._config.discount * self._world_model.heads["cont"](inp).mean
         else:
             discount = self._config.discount * torch.ones_like(reward)
+        ## entropy
         if self._config.future_entropy and self._config.actor_entropy > 0:
             reward += self._config.actor_entropy * actor_ent
         if self._config.future_entropy and self._config.actor_state_entropy > 0:
             reward += self._config.actor_state_entropy * state_ent
+        #valu_estimator
         value = self.critic(features).mode()
         target = lambda_return(
             reward[1:],
             value[:-1],
             discount[1:],
             bootstrap=value[-1],
-            lambda_=self._config.discount_lambda,
+            lambda_=self._config.lambda_gae,
             axis=0,
         )
         weights = torch.cumprod(

@@ -47,34 +47,18 @@ defaults_wis_v3:
   adam_lr_actor: 1.0e-4
   adam_lr_critic: 1.0e-4
   adam_eps: 1.0e-5
+  adam_ac_eps: 1.0e-5
   keep_state: True
-  batch_length: 48
-  batch_size: 32
   device: "cuda:0"
   grad_clip: 200
   grad_clip_ac: 200
   image_decoder_min_prob: 0
-  amp: False  # AMP no longer helps on A100
-  probe_gradients: False  # for baselines
-
-  # Training_v3
-  batch_size: 16
-  batch_length: 64
-  train_ratio: 512
-  pretrain: 100
-  model_lr: 1e-4
-  opt_eps: 1e-8
-  grad_clip: 1000
-  value_lr: 3e-5
-  actor_lr: 3e-5
-  ac_opt_eps: 1e-5
-  value_grad_clip: 100
-  actor_grad_clip: 100
-  dataset_size: 1000000
   slow_value_target: True
   slow_target_update: 1
   slow_target_fraction: 0.02
-  opt: 'adam'
+
+
+  
 
 
   # Eval
@@ -88,7 +72,6 @@ defaults_wis_v3:
 
   # Model
   model: dreamer
-  wm_type: v2
   deter_dim: 2048
   stoch_dim: 32
   stoch_discrete: 32
@@ -153,34 +136,14 @@ defaults_wis_v3:
   map_hidden_dim: 1024
 
   # Actor Critic
-  gamma: 0.995
+  discount: 0.995
   lambda_gae: 0.95
-  entropy: 0.003
-  target_interval: 100
+  actor_entropy: 0.003
+  # target_interval: 100
   imag_horizon: 15
   actor_grad: reinforce
   actor_dist: onehot
 
-  # Behavior v3.
-  discount: 0.997
-  discount_lambda: 0.95
-  imag_horizon: 15
-  imag_gradient: 'dynamics'
-  imag_gradient_mix: '0.0'
-  imag_sample: True
-  actor_dist: 'normal'
-  actor_entropy: 0.0003
-  actor_state_entropy: 0.0
-  actor_init_std: 1.0
-  actor_min_std: 0.1
-  actor_max_std: 1.0
-  actor_temp: 0.1
-  expl_amount: 0.0
-  eval_state_mean: False
-  collect_dyn_sample: True
-  behavior_stop_grad: True
-  value_decay: 0.0
-  future_entropy: False
 
   # Auxiliary Actor critic
   aux_critic: False
@@ -202,16 +165,18 @@ defaults_wis_v3:
   env_time_limit: 0
   env_no_terminal: False
 
-  #v3_env
-  # task: 'dmc_walker_walk'
+  #Environment
   size: [64, 64]
-  envs: 1
-  # action_repeat: 2
   time_limit: 1000
   grayscale: False
-  # prefill: 2500
   eval_noise: 0.0
-  reward_EMA: True
+
+  # envs: 1
+  # action_repeat: 2
+   # task: 'dmc_walker_walk'
+   # prefill: 2500
+  
+  
 
 minigrid:
   env_id: MiniGrid-MazeS11N-v0
@@ -374,3 +339,5 @@ debug:
   batch_length: 15
   batch_size: 5
   imag_horizon: 3
+
+

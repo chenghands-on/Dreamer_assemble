@@ -7,7 +7,7 @@ from distutils.util import strtobool
 from multiprocessing import Process
 from typing import List
 import torch
-from pydreamer.models import Dreamer
+from pydreamer.models import Dreamer_agent
 
 import generator
 import train
@@ -235,7 +235,8 @@ def main(conf):
     device = torch.device(conf.device)
 
     # 创建模型
-    model = Dreamer(conf)
+    model = Dreamer_agent(conf,obs_space,act_space,data_train_stats.stats_steps)
+    model = Dreamer_agent(conf)
     model.to(device)
     print(device)
     # 加载模型参数

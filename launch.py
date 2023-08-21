@@ -205,7 +205,7 @@ def launch_generator(env_id,
                     log_mlflow_metrics=log_mlflow_metrics,
                     split_fraction=split_fraction,
                     metrics_prefix=metrics_prefix,
-                    metrics_gamma=conf.gamma,
+                    metrics_gamma=conf.discount,
                     input_dirs=input_dirs
                 ))
     p.start()

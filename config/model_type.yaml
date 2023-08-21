@@ -1,0 +1,50 @@
+dreamer_v2:
+  wm_type: v2 
+  #Training:
+  batch_length: 64
+  batch_size: 16
+  # amp: False  # AMP no longer helps on A100
+  probe_gradients: False  # for baselines
+
+dreamer_v3:
+  wm_type: v3
+  # Training_v3
+  batch_size: 16
+  batch_length: 64
+  adam_lr: 1.0e-4
+  adam_lr_actor: 3.0e-5
+  adam_lr_critic: 3.0e-5
+  adam_eps: 1.0e-8
+  # train_ratio: 512
+  # pretrain: 100
+  grad_clip: 1000
+  adam_ac_eps: 1.0e-5
+  value_grad_clip: 100
+  actor_grad_clip: 100
+  probe_gradients: False
+  # dataset_size: 1000000
+
+  # a2c.
+  discount: 0.997
+  imag_gradient_mix: '0.0'
+  actor_dist: 'normal'
+  actor_entropy: 0.0003
+  actor_state_entropy: 0.0
+  actor_init_std: 1.0
+  actor_min_std: 0.1
+  actor_max_std: 1.0
+  actor_temp: 0.1
+  expl_amount: 0.0
+  eval_state_mean: False
+  collect_dyn_sample: True
+  
+  value_decay: 0.0
+  future_entropy: False
+  reward_EMA: True
+  # discount_lambda: 0.95
+  # imag_horizon: 15
+  # imag_gradient: 'dynamics'
+ 
+  # imag_sample: True
+  #现在传过来的feature都没有梯度的
+  # behavior_stop_grad: True

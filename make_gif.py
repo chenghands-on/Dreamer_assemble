@@ -10,7 +10,7 @@ from mlflow.tracking import MlflowClient
 # B, T = 3, 500
 
 def download_artifact_npz(run_id, artifact_path) -> Dict[str, np.ndarray]:
-    mlflow.set_tracking_uri('file:///home/chenghan/pydreamer/mlruns')
+    mlflow.set_tracking_uri('file:///home/chenghan/dreamer_assemble/mlruns')
     client = MlflowClient()
     with tempfile.TemporaryDirectory() as tmpdir:
         path = client.download_artifacts(run_id, artifact_path, tmpdir)
@@ -66,8 +66,24 @@ def make_gif_wm(env_name,path,index,action_type,fps=10,dream=True):
             dest_path = f'{folder_path}/origin_{action_type}_{index}_{i}.gif'
         with Path(dest_path).open('wb') as f:
             f.write(gif)
+            
+def make_gif(env_name, run_id, step, fps=10):
+    B=1;T=48
+    dest_path = f'figures/dream_{env_name}_{step}_v3.gif'
+    # artifact = f'd2_wm_dream/{step}.npz'
+    artifact = f'd2_wm_dream/{step}.npz'
+    data = download_artifact_npz(run_id, artifact)
+    img = data['image_error']
+    print(img)
+    print(img.shape)
+    img = img[:B, :T].reshape((-1, 64, 64, 3))
+    gif = encode_gif(img, fps)
+    with Path(dest_path).open('wb') as f:
+        f.write(gif)
 
+make_gif('dmc_walker_run', '8f788b70a59144d7b6751338a28c2909', '0040001')
 # path1='/home/chenghan/pydreamer/wm_results/tensors_Atari-Pong_704_data.npz'
-# path2='/home/chenghan/pydreamer/wm_results/dream_tensors_Atari-Pong_704_data.npz'
-# make_gif_wm('pong',path1,1,dream=False)
-# make_gif_wm('pong',path2,1,dream=True)
+# /home/chenghan/dreamer_assemble/mlruns/0/a91b13b54b05440d8b34228a8248c4db/artifacts
+# # path2='/home/chenghan/pydreamer/wm_results/dream_tensors_Atari-Pong_704_data.npz'
+# # make_gif_wm('pong',path1,1,dream=False)
+# make_gif_wm('pong',path1,1,dream=True)
