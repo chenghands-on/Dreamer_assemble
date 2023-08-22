@@ -327,53 +327,54 @@ class ActorCritic_v3(nn.Module):
         self._update_slow_target()
         metrics = {}
 
-        with RequiresGrad(self.actor):
-            with torch.cuda.amp.autocast(self._use_amp):
-                # features, states, actions = self._imagine(
-                #     start, self.actor, self._config.imag_horizon, repeats
-                # )
-                ##这个reward是通过wm送过来的
-                # reward = objective(features, states, actions)
-                actor_ent = self.actor(features[:-1]).entropy()
-                # state_ent = self._world_model.dynamics.get_dist(states).entropy()
-                # 暂时没影响，因为这个现在是0
-                state_ent=self.get_dist(states).entropy()
-                # this target is not scaled
-                # slow is flag to indicate whether slow_target is used for lambda-return
-                target, weights, base = self._compute_target(
-                    features, states, actions, rewards, actor_ent, state_ent
-                )
-                
-                #actor_loss
-                actor_loss, mets = self._compute_actor_loss(
-                    features,
-                    states,
-                    actions,
-                    target,
-                    actor_ent,
-                    state_ent,
-                    weights,
-                    base,
-                )
-                metrics.update(mets)
-                value_input = features
+        # with RequiresGrad(self.actor):
+        with torch.cuda.amp.autocast(self._use_amp):
+            # features, states, actions = self._imagine(
+            #     start, self.actor, self._config.imag_horizon, repeats
+            # )
+            ##这个reward是通过wm送过来的
+            # reward = objective(features, states, actions)
+            actor_ent = self.actor(features[:-1]).entropy()
+            # state_ent = self._world_model.dynamics.get_dist(states).entropy()
+            # 暂时没影响，因为这个现在是0
+            state_ent=self.get_dist(states).entropy()
+            # this target is not scaled
+            # slow is flag to indicate whether slow_target is used for lambda-return
+            target, weights, base = self._compute_target(
+                features, states, actions, rewards, actor_ent, state_ent
+            )
+            
+            #actor_loss
+            actor_loss, mets = self._compute_actor_loss(
+                features,
+                states,
+                actions,
+                target,
+                actor_ent,
+                state_ent,
+                weights,
+                base,
+            )
+            metrics.update(mets)
+            value_input = features
 
-        with RequiresGrad(self.critic):
-            with torch.cuda.amp.autocast(self._use_amp):
-                value = self.critic(value_input[:-1].detach())
-                target = torch.stack(target, dim=1)
-                # (time, batch, 1), (time, batch, 1) -> (time, batch)
-                # value_loss
-                value_loss = -value.log_prob(target.detach())
-                slow_target = self._slow_value(value_input[:-1].detach())
-                if self._config.slow_value_target:
-                    value_loss = value_loss - value.log_prob(
-                        slow_target.mode().detach()
-                    )
-                if self._config.value_decay:
-                    value_loss += self._config.value_decay * value.mode()
-                # (time, batch, 1), (time, batch, 1) -> (1,)
-                value_loss = torch.mean(weights[:-1] * value_loss[:, :, None])
+        # with RequiresGrad(self.critic):
+        with torch.cuda.amp.autocast(self._use_amp):
+            value = self.critic(value_input[:-1].detach())
+            target = torch.stack(target, dim=1)
+            # (time, batch, 1), (time, batch, 1) -> (time, batch)
+            # value_loss
+            value_loss = -value.log_prob(target.detach())
+            slow_target = self._slow_value(value_input[:-1].detach())
+            if self._config.slow_value_target:
+                value_loss = value_loss - value.log_prob(
+                    slow_target.mode().detach()
+                )
+            if self._config.value_decay:
+                value_loss += self._config.value_decay * value.mode()
+            # (time, batch, 1), (time, batch, 1) -> (1,)
+            value_loss = torch.mean(weights[:-1] * value_loss[:, :, None])
+            print("loss_critic",value_loss)
 
         metrics.update(tensorstats(value.mode(), "policy_value"))
         metrics.update(tensorstats(target, "target"))

@@ -199,6 +199,22 @@ def run(conf,space):
                     for opt in optimizers:
                         scaler.step(opt)
                     scaler.update()
+                    
+                    for name, param in model.ac.critic.named_parameters():
+                        if param.grad is not None:
+                            print(name, param.grad.norm().item())
+                        else:
+                            print(param.grad)
+                    # for name, param in model.ac.actor.named_parameters():
+                    #     if param.grad is not None:
+                    #         print(name, param.grad.norm().item())
+                    #     else:
+                    #         print(param.grad)
+                    # for name, param in model.wm.dynamics.named_parameters():
+                    #     if param.grad is not None:
+                    #         print(name, param.grad.norm().item())
+                    #     else:
+                    #         print(param.grad)
 
                 with timer('other'):
 
@@ -246,7 +262,8 @@ def run(conf,space):
                         metrics.update({f'train/{k}_max': np.array(v).max() for k, v in metrics_max.items()})
                         metrics['train/steps'] = steps
                         metrics['_step'] = steps
-                        metrics['_loss'] = metrics.get('train/loss_model', 0)
+                        # metrics['_loss'] = metrics.get('train/loss_model', 0)
+                        metrics['_losses'] =sum(losses).item()
                         metrics['_timestamp'] = datetime.now().timestamp()
 
                         t = time.time()
@@ -257,6 +274,7 @@ def run(conf,space):
                         info(f"[{steps:06}]"
                              f"  loss_model: {metrics.get('train/loss_model', 0):.3f}"
                              f"  loss_critic: {metrics.get('train/loss_critic', 0):.3f}"
+                              f"  policy_value: {metrics.get('train/loss_actor',0):.3f}"
                              f"  policy_value: {metrics.get('train/policy_value',0):.3f}"
                              f"  policy_entropy: {metrics.get('train/policy_entropy',0):.3f}"
                              f"  fps: {metrics['train/fps']:.3f}"

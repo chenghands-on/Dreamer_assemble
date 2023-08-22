@@ -359,9 +359,10 @@ class WorldModel_v3(nn.Module):
         metrics["kl_free"] = kl_free
         metrics["dyn_scale"] = dyn_scale
         metrics["rep_scale"] = rep_scale
-        metrics["dyn_loss"] = to_np(dyn_loss)
-        metrics["rep_loss"] = to_np(rep_loss)
-        metrics["kl"] = to_np(torch.mean(kl_value))
+        metrics["loss_dyn"] = to_np(dyn_loss)
+        metrics["loss_rep"] = to_np(rep_loss)
+        metrics["loss_kl"] = to_np(kl_loss)
+        # metrics["kl"] = to_np(torch.mean(kl_value))
         with torch.cuda.amp.autocast(self._use_amp):
             metrics["prior_ent"] = to_np(
                 torch.mean(self.dynamics.get_dist(prior).entropy())
