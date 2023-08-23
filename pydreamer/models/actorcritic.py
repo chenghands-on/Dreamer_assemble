@@ -230,45 +230,45 @@ class ActorCritic_v2(nn.Module):
 
 
 class ActorCritic_v3(nn.Module):
-    def __init__(self, config,world_model,device,stop_grad_actor=True, reward=None):
+    def __init__(self, conf,world_model,device,stop_grad_actor=True, reward=None):
         super(ActorCritic_v3, self).__init__()
-        self._use_amp = True if config.precision == 16 else False
-        self._config = config
+        self._use_amp = True if conf.precision == 16 else False
+        self._conf = conf
         self._world_model = world_model
         self._stop_grad_actor = stop_grad_actor
         self._reward = reward
-        self._discrete=config.dyn_discrete
+        self._discrete=conf.dyn_discrete
         self._device=device
-        if config.dyn_discrete:
-            feat_size = config.dyn_stoch * config.dyn_discrete + config.dyn_deter
+        if conf.dyn_discrete:
+            feat_size = conf.deter_dim + conf.stoch_dim * (conf.stoch_discrete or 1)
         else:
-            feat_size = config.dyn_stoch + config.dyn_deter
+            feat_size = conf.deter_dim + conf.stoch_dim
         
         # 给出actor和critic
         self.actor = ActionHead(
             feat_size,
-            config.action_dim,
-            config.actor_layers,
-            config.units,
-            config.act,
-            config.norm,
-            config.actor_dist,
-            config.actor_init_std,
-            config.actor_min_std,
-            config.actor_max_std,
-            config.actor_temp,
+            conf.action_dim,
+            conf.actor_layers,
+            conf.units,
+            conf.act,
+            conf.norm,
+            conf.actor_dist,
+            conf.actor_init_std,
+            conf.actor_min_std,
+            conf.actor_max_std,
+            conf.actor_temp,
             outscale=1.0,
-            unimix_ratio=config.action_unimix_ratio,
+            unimix_ratio=conf.action_unimix_ratio,
         )
-        if config.value_head == "symlog_disc":
+        if conf.value_head == "symlog_disc":
             self.critic = MLP_v3(
                 feat_size,
                 (255,),
-                config.value_layers,
-                config.units,
-                config.act,
-                config.norm,
-                config.value_head,
+                conf.value_layers,
+                conf.units,
+                conf.act,
+                conf.norm,
+                conf.value_head,
                 outscale=0.0,
                 device=self._device,
             )
@@ -276,35 +276,35 @@ class ActorCritic_v3(nn.Module):
             self.critic = MLP_v3(
                 feat_size,
                 [],
-                config.value_layers,
-                config.units,
-                config.act,
-                config.norm,
-                config.value_head,
+                conf.value_layers,
+                conf.units,
+                conf.act,
+                conf.norm,
+                conf.value_head,
                 outscale=0.0,
                 device=self._device,
             )
-        if config.slow_value_target:
+        if conf.slow_value_target:
             self._slow_value = copy.deepcopy(self.critic)
             self._updates = 0
-        # kw = dict(wd=config.weight_decay, opt=config.opt, use_amp=self._use_amp)
+        # kw = dict(wd=conf.weight_decay, opt=conf.opt, use_amp=self._use_amp)
         # self._actor_opt = Optimizer(
         #     "actor",
         #     self.actor.parameters(),
-        #     config.actor_lr,
-        #     config.ac_opt_eps,
-        #     config.actor_grad_clip,
+        #     conf.actor_lr,
+        #     conf.ac_opt_eps,
+        #     conf.actor_grad_clip,
         #     **kw,
         # )
         # self._value_opt = Optimizer(
         #     "value",
         #     self.value.parameters(),
-        #     config.value_lr,
-        #     config.ac_opt_eps,
-        #     config.value_grad_clip,
+        #     conf.value_lr,
+        #     conf.ac_opt_eps,
+        #     conf.value_grad_clip,
         #     **kw,
         # )
-        if self._config.reward_EMA:
+        if self._conf.reward_EMA:
             self.reward_ema = RewardEMA(device=self._device)
 
     def training_step(
@@ -330,14 +330,15 @@ class ActorCritic_v3(nn.Module):
         # with RequiresGrad(self.actor):
         with torch.cuda.amp.autocast(self._use_amp):
             # features, states, actions = self._imagine(
-            #     start, self.actor, self._config.imag_horizon, repeats
+            #     start, self.actor, self._conf.imag_horizon, repeats
             # )
             ##这个reward是通过wm送过来的
             # reward = objective(features, states, actions)
             actor_ent = self.actor(features[:-1]).entropy()
             # state_ent = self._world_model.dynamics.get_dist(states).entropy()
             # 暂时没影响，因为这个现在是0
-            state_ent=self.get_dist(states).entropy()
+            # state_ent=self.get_dist(states).entropy()
+            state_ent=0
             # this target is not scaled
             # slow is flag to indicate whether slow_target is used for lambda-return
             target, weights, base = self._compute_target(
@@ -366,20 +367,20 @@ class ActorCritic_v3(nn.Module):
             # value_loss
             value_loss = -value.log_prob(target.detach())
             slow_target = self._slow_value(value_input[:-1].detach())
-            if self._config.slow_value_target:
+            if self._conf.slow_value_target:
                 value_loss = value_loss - value.log_prob(
                     slow_target.mode().detach()
                 )
-            if self._config.value_decay:
-                value_loss += self._config.value_decay * value.mode()
+            if self._conf.value_decay:
+                value_loss += self._conf.value_decay * value.mode()
             # (time, batch, 1), (time, batch, 1) -> (1,)
             value_loss = torch.mean(weights[:-1] * value_loss[:, :, None])
-            print("loss_critic",value_loss)
+            # print("loss_critic",value_loss)
 
         metrics.update(tensorstats(value.mode(), "policy_value"))
         metrics.update(tensorstats(target, "target"))
         metrics.update(tensorstats(rewards, "imag_reward"))
-        if self._config.actor_dist in ["onehot"]:
+        if self._conf.actor_dist in ["onehot"]:
             metrics.update(
                 tensorstats(
                     torch.argmax(actions, dim=-1).float(), "actions"
@@ -410,7 +411,7 @@ class ActorCritic_v3(nn.Module):
     #         feat = dynamics.to_feature(state)
     #         inp = feat.detach() if self._stop_grad_actor else feat
     #         action = policy(inp).sample()
-    #         succ = dynamics.img_step(state, action, sample=self._config.imag_sample)
+    #         succ = dynamics.img_step(state, action, sample=self._conf.imag_sample)
     #         return succ, feat, action
 
     #     succ, feats, actions = static_scan(
@@ -426,7 +427,7 @@ class ActorCritic_v3(nn.Module):
         if self._discrete:
             logit = state["logit"]
             dist = torchd.independent.Independent(
-                OneHotDist(logit, unimix_ratio=self._config.action_unimix_ratio), 1
+                OneHotDist(logit, unimix_ratio=self._conf.action_unimix_ratio), 1
             )
         else:
             mean, std = state["mean"], state["std"]
@@ -441,14 +442,14 @@ class ActorCritic_v3(nn.Module):
         ## discount
         if "cont" in self._world_model.heads:
             inp = self._world_model.dynamics.to_feature(states)
-            discount = self._config.discount * self._world_model.heads["cont"](inp).mean
+            discount = self._conf.discount * self._world_model.heads["cont"](inp).mean
         else:
-            discount = self._config.discount * torch.ones_like(reward)
+            discount = self._conf.discount * torch.ones_like(reward)
         ## entropy
-        if self._config.future_entropy and self._config.actor_entropy > 0:
-            reward += self._config.actor_entropy * actor_ent
-        if self._config.future_entropy and self._config.actor_state_entropy > 0:
-            reward += self._config.actor_state_entropy * state_ent
+        if self._conf.future_entropy and self._conf.actor_entropy > 0:
+            reward += self._conf.actor_entropy * actor_ent
+        if self._conf.future_entropy and self._conf.actor_state_entropy > 0:
+            reward += self._conf.actor_state_entropy * state_ent
         #valu_estimator
         value = self.critic(features).mode()
         target = lambda_return(
@@ -456,7 +457,7 @@ class ActorCritic_v3(nn.Module):
             value[:-1],
             discount[1:],
             bootstrap=value[-1],
-            lambda_=self._config.lambda_gae,
+            lambda_=self._conf.lambda_gae,
             axis=0,
         )
         weights = torch.cumprod(
@@ -481,7 +482,7 @@ class ActorCritic_v3(nn.Module):
         actor_ent = policy.entropy()
         # Q-val for actor is not transformed using symlog
         target = torch.stack(target, dim=1)
-        if self._config.reward_EMA:
+        if self._conf.reward_EMA:
             offset, scale = self.reward_ema(target)
             normed_target = (target - offset) / scale
             normed_base = (base - offset) / scale
@@ -491,37 +492,37 @@ class ActorCritic_v3(nn.Module):
             metrics["EMA_005"] = to_np(values[0])
             metrics["EMA_095"] = to_np(values[1])
 
-        if self._config.actor_grad == "dynamics":
+        if self._conf.actor_grad == "dynamics":
             actor_target = adv
-        elif self._config.actor_grad == "reinforce":
+        elif self._conf.actor_grad == "reinforce":
             actor_target = (
                 policy.log_prob(actions)[:, :, None]
                 * (target - self.critic(features[:-1]).mode()).detach()
             )
-        elif self._config.actor_grad == "both":
+        elif self._conf.actor_grad == "both":
             actor_target = (
                 policy.log_prob(actions)[:, :, None]
                 * (target - self.critic(features[:-1]).mode()).detach()
             )
-            mix = self._config.imag_gradient_mix()
+            mix = self._conf.imag_gradient_mix()
             actor_target = mix * target + (1 - mix) * actor_target
             metrics["imag_gradient_mix"] = mix
         else:
-            raise NotImplementedError(self._config.actor_grad)
-        if not self._config.future_entropy and (self._config.actor_entropy > 0):
-            actor_entropy = self._config.actor_entropy * actor_ent[:, :, None]
+            raise NotImplementedError(self._conf.actor_grad)
+        if not self._conf.future_entropy and (self._conf.actor_entropy > 0):
+            actor_entropy = self._conf.actor_entropy * actor_ent[:, :, None]
             actor_target += actor_entropy
-        if not self._config.future_entropy and (self._config.actor_state_entropy > 0):
-            state_entropy = self._config.actor_state_entropy * state_ent[:-1]
+        if not self._conf.future_entropy and (self._conf.actor_state_entropy > 0):
+            state_entropy = self._conf.actor_state_entropy * state_ent[:-1]
             actor_target += state_entropy
             metrics["actor_state_entropy"] = to_np(torch.mean(state_entropy))
         actor_loss = -torch.mean(weights[:-1] * actor_target)
         return actor_loss, metrics
 
     def _update_slow_target(self):
-        if self._config.slow_value_target:
-            if self._updates % self._config.slow_target_update == 0:
-                mix = self._config.slow_target_fraction
+        if self._conf.slow_value_target:
+            if self._updates % self._conf.slow_target_update == 0:
+                mix = self._conf.slow_target_fraction
                 for s, d in zip(self.critic.parameters(), self._slow_value.parameters()):
                     d.data = mix * s.data + (1 - mix) * d.data
             self._updates += 1

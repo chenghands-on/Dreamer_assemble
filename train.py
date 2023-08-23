@@ -200,11 +200,11 @@ def run(conf,space):
                         scaler.step(opt)
                     scaler.update()
                     
-                    for name, param in model.ac.critic.named_parameters():
-                        if param.grad is not None:
-                            print(name, param.grad.norm().item())
-                        else:
-                            print(param.grad)
+                    # for name, param in model.ac.critic.named_parameters():
+                    #     if param.grad is not None:
+                    #         print(name, param.grad.norm().item())
+                    #     else:
+                    #         print(param.grad)
                     # for name, param in model.ac.actor.named_parameters():
                     #     if param.grad is not None:
                     #         print(name, param.grad.norm().item())
@@ -465,7 +465,8 @@ def prepare_batch_npz(data: Dict[str, Tensor], take_b=999):
             print(f"Object of type {type(val)} doesn't have a 'shape' attribute.",val,key)
             # 可以选择在这里抛出错误，或者让程序继续执行
             raise
-
+        if val.requires_grad:
+            print(key)
         x = val.cpu().numpy()  # (T,B,*)
         if x.dtype in [np.float16, np.float64]:
             x = x.astype(np.float32)

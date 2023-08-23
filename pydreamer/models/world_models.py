@@ -30,16 +30,10 @@ class WorldModel_v2(nn.Module):
         self.kl_weight = conf.kl_weight
         self.aux_critic_weight = conf.aux_critic_weight
         
-        ## parameter for different WM
         self.wm_type=conf.wm_type
         # if self.wm_type=='v2':
         self.kl_balance=conf.kl_balance
-        # elif self.wm_type=='v3':
-        #     self.kl_balance=conf.kl_balance
-        #     self._step=step
-        #     self.kl_free=conf.kl_free
-        #     self.dyn_scale=conf.dyn_scale
-        #     self.rep_scale=conf.rep_scale
+       
         # Encoder
 
         self.encoder = MultiEncoder_v2(shapes,conf)
@@ -208,48 +202,69 @@ class WorldModel_v2(nn.Module):
     
     
 class WorldModel_v3(nn.Module):
-    def __init__(self, obs_space, act_space, step, conf,device):
-        super(WorldModel_v3, self).__init__()
+    def __init__(self, obs_space, step, conf,device):
+        # super(WorldModel_v3, self).__init__()
+        super().__init__()
         self._step = step
-        self._use_amp = True if conf.precision == 16 else False
+        # self._use_amp = True if conf.precision == 16 else False
+        self.kl_weight = conf.kl_weight
         self._conf = conf
         shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
         self._device=device
         # Encoder
-        self.encoder = MultiEncoder_v3(shapes, conf)
+        # self.encoder = MultiEncoder_v3(shapes, conf)
+        self.encoder = MultiEncoder_v2(shapes,conf)
+        self.deter_dim = conf.deter_dim
+        self.stoch_dim = conf.stoch_dim
+        self.stoch_discrete = conf.stoch_discrete
+        self.kl_weight = conf.kl_weight
+        self.aux_critic_weight = conf.aux_critic_weight
+        self.kl_balance=conf.kl_balance
         
         # RSSM
-        self.embed_size = self.encoder.out_dim
-        self.dynamics = RSSM(
-            conf.dyn_stoch,
-            conf.dyn_deter,
-            conf.dyn_hidden,
-            conf.dyn_input_layers,
-            conf.dyn_output_layers,
-            conf.dyn_rec_depth,
-            conf.dyn_shared,
-            conf.dyn_discrete,
-            conf.act,
-            conf.norm,
-            conf.dyn_mean_act,
-            conf.dyn_std_act,
-            conf.dyn_temp_post,
-            conf.dyn_min_std,
-            conf.dyn_cell,
-            conf.unimix_ratio,
-            conf.initial,
-            #为啥原文件里没有这个
-            # conf.num_actions,
-            conf.action_dim,
-            self.embed_size,
-            conf.device,
-        )
+        # self.embed_size = self.encoder.out_dim
+        # # self.dynamics = RSSM(
+        # #     conf.dyn_stoch,
+        # #     conf.dyn_deter,
+        # #     conf.dyn_hidden,
+        # #     conf.dyn_input_layers,
+        # #     conf.dyn_output_layers,
+        # #     conf.dyn_rec_depth,
+        # #     conf.dyn_shared,
+        # #     conf.dyn_discrete,
+        # #     conf.act,
+        # #     conf.norm,
+        # #     conf.dyn_mean_act,
+        # #     conf.dyn_std_act,
+        # #     conf.dyn_temp_post,
+        # #     conf.dyn_min_std,
+        # #     conf.dyn_cell,
+        # #     conf.unimix_ratio,
+        # #     conf.initial,
+        # #     #为啥原文件里没有这个
+        # #     # conf.num_actions,
+        # #     conf.action_dim,
+        # #     self.embed_size,
+        # #     conf.device,
+        # # )
+        self.dynamics = RSSMCore(embed_dim=self.encoder.out_dim,
+                             action_dim=conf.action_dim,
+                             deter_dim=conf.deter_dim,
+                             stoch_dim=conf.stoch_dim,
+                             stoch_discrete=conf.stoch_discrete,
+                             hidden_dim=conf.hidden_dim,
+                             gru_layers=conf.gru_layers,
+                             gru_type=conf.gru_type,
+                             layer_norm=conf.layer_norm,
+                             tidy=conf.tidy)
         # dECODERS FOR IMAGE,REWARDS and counts
         self.heads = nn.ModuleDict()
         if conf.dyn_discrete:
-            feat_size = conf.dyn_stoch * conf.dyn_discrete + conf.dyn_deter
+            # feat_size = conf.dyn_stoch * conf.dyn_discrete + conf.dyn_deter
+            feat_size=conf.deter_dim+conf.stoch_dim * (conf.stoch_discrete or 1)
         else:
-            feat_size = conf.dyn_stoch + conf.dyn_deter
+            # feat_size = conf.dyn_stoch + conf.dyn_deter
+            feat_size=conf.deter_dim+conf.stoch_dim
         self.heads["decoder"] = MultiDecoder_v3(
             feat_size, shapes, **conf.decoder
         )
@@ -277,7 +292,7 @@ class WorldModel_v3(nn.Module):
                 outscale=0.0,
                 device=self._device,
             )
-        self.heads["cont"] = MLP_v3(
+        self.heads["terminal"] = MLP_v3(
             feat_size,  # pytorch version
             [],
             conf.cont_layers,
@@ -309,80 +324,151 @@ class WorldModel_v3(nn.Module):
                 in_state: Any
                 ):
         # TODO:v3好像不需要输入state，一开始h和z都是随机initial的；但是v2需要？
-        model_loss,feat, post, context, metrics,tensors= \
-            self.training_step(obs, forward_only=True)
-        out_state={key: tensor[-1] for key, tensor in post.items()}
-        return feat, out_state
+        model_loss,features, states, out_state, metrics, tensors= \
+            self.training_step(obs, in_state,forward_only=True)
+        # out_state={key: tensor[-1] for key, tensor in post.items()}
+        return features, out_state
 
-    def training_step(self, data,do_image_pred=False,forward_only=False):
+    def training_step(self,
+                      obs: Dict[str, Tensor],
+                      in_state: Any,
+                      iwae_samples: int = 1,
+                      do_open_loop=False,
+                      do_image_pred=False,
+                      forward_only=False
+                      ):
         # action (batch_size, batch_length, act_dim)
         # image (batch_size, batch_length, h, w, ch)
         # reward (batch_size, batch_length)
         # discount (batch_size, batch_length)
-        data = self.preprocess(data,forward_only=True)
-        with tools_v3.RequiresGrad(self):
-            with torch.cuda.amp.autocast(self._use_amp):
-                embed = self.encoder(data)
-                post, prior = self.dynamics.observe(
-                    embed, data["action"], data["reset"]
-                )
-                if forward_only:
-                    post = {k: v.detach() for k, v in post.items()}
-                    feat=self.dynamics.to_feature(post)
-                    return torch.tensor(0.0), feat, post, {}, {},{}
-                kl_free = tools_v3.schedule(self._conf.kl_free, self._step)
-                dyn_scale = tools_v3.schedule(self._conf.dyn_scale, self._step)
-                rep_scale = tools_v3.schedule(self._conf.rep_scale, self._step)
-                kl_loss, kl_value, dyn_loss, rep_loss = self.dynamics.kl_loss(
-                    post, prior, kl_free, dyn_scale, rep_scale
-                )
-                preds = {}
-                for name, head in self.heads.items():
-                    grad_head = name in self._conf.grad_heads
-                    feat = self.dynamics.to_feature(post)
-                    feat = feat if grad_head else feat.detach()
-                    pred = head(feat)
-                    if type(pred) is dict:
-                        preds.update(pred)
-                    else:
-                        preds[name] = pred
-                losses = {}
-                for name, pred in preds.items():
-                    like = pred.log_prob(data[name])
-                    losses[name] = -torch.mean(like) * self._scales.get(name, 1.0)
-                model_loss = sum(losses.values()) + kl_loss
+        obs = self.preprocess(obs,forward_only=True)
+        # with tools_v3.RequiresGrad(self):
+            # with torch.cuda.amp.autocast(self._use_amp):
+            
+        # Encoder
+        embed = self.encoder(obs)
+        
+        #RSSM
+        
+        # post, prior = self.dynamics.observe(
+        #     embed, data["action"], data["reset"]
+        # )
+        # if forward_only:
+        #     post = {k: v.detach() for k, v in post.items()}
+        #     feat=self.dynamics.to_feature(post)
+        #     return torch.tensor(0.0), feat, post, {}, {},{}
+        
+        prior, post, post_samples, features, states, out_state = \
+            self.dynamics.forward(embed,
+                              obs['action'],
+                              obs['reset'],
+                              in_state,
+                              iwae_samples=iwae_samples,
+                              do_open_loop=do_open_loop)
+
+        if forward_only:
+            return torch.tensor(0.0), features, states, out_state, {}, {}
+        
+        # KL loss
+        kl_free = tools_v3.schedule(self._conf.kl_free, self._step)
+        dyn_scale = tools_v3.schedule(self._conf.dyn_scale, self._step)
+        rep_scale = tools_v3.schedule(self._conf.rep_scale, self._step)
+        # kl_loss, kl_value, dyn_loss, rep_loss = self.dynamics.kl_loss(
+        #     post, prior, kl_free, dyn_scale, rep_scale
+        # )
+        # preds = {}
+        d = self.dynamics.zdistr
+        dprior = d(prior)
+        dpost = d(post)
+        loss_kl_exact = D.kl.kl_divergence(dpost, dprior)
+        if not self.kl_balance:
+                loss_kl = loss_kl_exact
+        else:
+            loss_kl_postgrad = D.kl.kl_divergence(dpost, d(prior.detach()))
+            loss_kl_priograd = D.kl.kl_divergence(d(post.detach()), dprior)
+            # if self.wm_type=='v2':
+            # loss_kl = (1 - self.kl_balance) * loss_kl_postgrad + self.kl_balance * loss_kl_priograd
+            # elif self.wm_type=='v3':
+            # Do a clip
+            rep_loss = torch.clip(loss_kl_postgrad, min=kl_free)
+            dyn_loss = torch.clip(loss_kl_priograd, min=kl_free)
+            loss_kl = dyn_scale * dyn_loss + rep_scale * rep_loss
+            
+        # decoder
+        preds={}
+        for name, head in self.heads.items():
+            grad_head = name in self._conf.grad_heads
+            # features = self.dynamics.to_feature(post)
+            features = features if grad_head else features.detach()
+            features_decoder=features[:,:,0]
+            pred = head(features_decoder)
+            if type(pred) is dict:
+                preds.update(pred)
+            else:
+                preds[name] = pred
+                
+        # Decoder Loss
+        losses = {}
+        for name, pred in preds.items():
+            # pred=pred[:,:,0] ##把iwae sample给去掉
+            # I = features.shape[2]
+            # target = insert_dim(obs[name], 2, I)  # Expand target with iwae_samples dim, because features have it
+            like = pred.log_prob(obs[name])
+            losses[name] = -torch.mean(like) * self._scales.get(name, 1.0)
+            
+        loss_kl=torch.mean(loss_kl)
+        model_loss = sum(losses.values()) + self.kl_weight * loss_kl
         #     metrics = self._model_opt(model_loss, self.parameters())
-        tensors = {}
-        metrics = {}
-        metrics["loss_model"] = model_loss.detach().cpu().numpy()
-        metrics.update({f"{name}_loss": to_np(loss) for name, loss in losses.items()})
-        metrics["kl_free"] = kl_free
-        metrics["dyn_scale"] = dyn_scale
-        metrics["rep_scale"] = rep_scale
-        metrics["loss_dyn"] = to_np(dyn_loss)
-        metrics["loss_rep"] = to_np(rep_loss)
-        metrics["loss_kl"] = to_np(kl_loss)
-        # metrics["kl"] = to_np(torch.mean(kl_value))
-        with torch.cuda.amp.autocast(self._use_amp):
-            metrics["prior_ent"] = to_np(
-                torch.mean(self.dynamics.get_dist(prior).entropy())
-            )
-            metrics["post_ent"] = to_np(
-                torch.mean(self.dynamics.get_dist(post).entropy())
-            )
-            context = dict(
-                embed=embed,
-                feat=self.dynamics.to_feature(post),
-                kl=kl_value,
-                postent=self.dynamics.get_dist(post).entropy(),
-            )
-        post = {k: v.detach() for k, v in post.items()}
-        feat=self.dynamics.to_feature(post)
+        
+        
+        # Metrics
+        with torch.no_grad():
+            tensors = {}
+            metrics = {}
+            metrics["loss_model"] = model_loss.detach().cpu().numpy()
+            metrics.update({f"{name}_loss": to_np(loss) for name, loss in losses.items()})
+            metrics["kl_free"] = kl_free
+            metrics["dyn_scale"] =dyn_scale
+            metrics["rep_scale"] = rep_scale
+            metrics["loss_dyn"] = to_np(torch.mean(dyn_loss))
+            metrics["loss_rep"] = to_np(torch.mean(rep_loss))
+            metrics["loss_kl"] = to_np(loss_kl)
+            # metrics["kl"] = to_np(torch.mean(kl_value))
+        # with torch.cuda.amp.autocast(self._use_amp):
+            # metrics["prior_ent"] = to_np(
+            #     torch.mean(self.dynamics.get_dist(prior).entropy())
+            # )
+            # metrics["post_ent"] = to_np(
+            #     torch.mean(self.dynamics.get_dist(post).entropy())
+            # )
+            # context = dict(
+            #     embed=embed,
+            #     feat=self.dynamics.to_feature(post),
+            #     kl=kl_value,
+            #     postent=self.dynamics.get_dist(post).entropy(),
+            # )
+        # post = {k: v.detach() for k, v in post.items()}
+        # feat=self.dynamics.to_feature(post)
         
         # Predictions
         if do_image_pred:
-            tensors=self.video_pred(data)
-        return model_loss,feat, post, context, metrics,tensors
+            prior_samples = self.dynamics.zdistr(prior).sample().reshape(post_samples.shape)
+            features_prior = self.dynamics.feature_replace_z(features, prior_samples)
+            openl = self.heads["decoder"](features_prior)["image"].mode()
+            reward_prior = self.heads["reward"](features_prior).mode()
+            # observed image is given until 5 steps
+            # model = torch.cat([recon[:5, :6], openl], 0)
+            model=openl[:,:,0]
+            # truth = obs["image"] + 0.5
+            # model = model + 0.5
+            truth=obs['image']
+            error = (model - truth + 1.0) / 2.0
+        
+        # train 中已有函数保存original data了
+        # tensors.update(data)
+            tensors["image_pred"]=model.detach()
+            tensors["image_error"]=error.detach()
+        return model_loss,features, states, out_state, metrics,tensors
 
     def preprocess(self, obs,forward_only=False):
         obs = obs.copy()
@@ -391,11 +477,11 @@ class WorldModel_v3(nn.Module):
         obs["reward"] = torch.Tensor(obs["reward"]).unsqueeze(-1)
         if "discount" in obs:
             obs["discount"] *= self._conf.discount
-            # (batch_size, batch_length) -> (batch_size, batch_length, 1)
+            # (batch_size, batch_length) -> (batch_size, batch_length, 1) 
             obs["discount"] = torch.Tensor(obs["discount"]).unsqueeze(-1)
         if "terminal" in obs:
-            # this label is necessary to train cont_head
-            obs["cont"] = torch.Tensor(1.0 - obs["terminal"]).unsqueeze(-1)
+            # this label is necessary to train cont_head for Bernoulli操作
+            obs["terminal"] = torch.Tensor(1.0 - obs["terminal"]).unsqueeze(-1)
         else:
             raise ValueError('"terminal" was not found in observation.')
         if not forward_only:

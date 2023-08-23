@@ -188,11 +188,13 @@ def mlflow_load_checkpoint(model, optimizers=tuple(), artifact_path='checkpoints
         run_id = mlflow.active_run().info.run_id  # type: ignore
         try:
             path = client.download_artifacts(run_id, artifact_path, tmpdir)
+            print('successfully load,{}'.format(path))
         except Exception as e:  # TODO: check if it's an error instead of expected "not found"
             # Checkpoint not found
             return None
         try:
             checkpoint = torch.load(path, map_location=map_location)
+            print('successfully load,{}'.format(path))
         except:
             exception('Error reading checkpoint')
             return None

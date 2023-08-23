@@ -38,7 +38,7 @@ class Dreamer_agent(nn.Module):
         if self.wm_type=='v2':
             self.wm = WorldModel_v2(obs_space,conf)
         elif self.wm_type=='v3':
-            self.wm = WorldModel_v3(obs_space,act_space,step,conf,self._device)
+            self.wm = WorldModel_v3(obs_space,step,conf,self._device)
 
         # Actor critic
         
@@ -112,16 +112,16 @@ class Dreamer_agent(nn.Module):
         # Forward (actor critic)
         if self.wm_type=='v2':
             
-            feature = features[:, :, 0]  # (T=1,B,I=1,F) => (1,B,F)
+            feature = features[:, :, 0]  # (T=1,B,I=1,F) => (1,B,F) ## features.shape(1,1,1,2048)T*B*I*(D+S)
             action_distr=self.ac.forward_actor(feature)
             value=self.ac.forward_value(feature)
             metrics = dict(policy_value=value.detach().mean())
         elif self.wm_type=='v3':
-            feature = features[0, :, :]
+            feature = features[0, :, :] ##features.shape(1,1,1536)T*B*(D+S)
             action_distr = self.ac.actor(feature)  # (1,B,A)
             value = self.ac.critic(feature)  # (1,B)
             metrics={}
-            metrics.update(tensorstats(value.mode(), "value"))
+            metrics.update(tensorstats(value.mode(), "policy_value"))
         
         return action_distr, out_state, metrics
 
@@ -153,8 +153,14 @@ class Dreamer_agent(nn.Module):
                                     do_open_loop=do_open_loop,
                                     do_image_pred=do_image_pred)
         elif self.wm_type=='v3':
-            loss_model,features, post, context, metrics,tensors=self.wm.training_step(obs,do_image_pred=do_image_pred)
-            out_state={key: tensor[-1] for key, tensor in post.items()}
+            # loss_model,features, post, context, metrics,tensors=self.wm.training_step(obs,do_image_pred=do_image_pred)
+            # out_state={key: tensor[-1] for key, tensor in post.items()}
+            loss_model, features, states, out_state, metrics, tensors = \
+                self.wm.training_step(obs,
+                                    in_state,
+                                    iwae_samples=iwae_samples,
+                                    do_open_loop=do_open_loop,
+                                    do_image_pred=do_image_pred)
 
         # Map probe
 
@@ -164,20 +170,23 @@ class Dreamer_agent(nn.Module):
         tensors.update(**tensors_probe)
 
         # Policy
+        
+        in_state_dream: StateB = map_structure(states, lambda x: flatten_batch(x.detach())[0]) 
+        # type: ignore  # (T,B,I) => (TBI)
         if self.wm_type=='v2':
-            in_state_dream: StateB = map_structure(states, lambda x: flatten_batch(x.detach())[0])  # type: ignore  # (T,B,I) => (TBI)
             features_dream, actions_dream, rewards_dream, terminals_dream, states_dream = \
             self.dream(in_state_dream, H, self.ac.actor_grad == 'dynamics')  # (H+1,TBI,D)
+        
         elif self.wm_type=='v3':
-            states=post
-            flatten = lambda x: x.reshape([-1] + list(x.shape[2:]))
-            in_state_dream = {k: flatten(v) for k, v in states.items()}
-            # in_state_dream={key: tensor[0] for key, tensor in states.items()}
-            # in_state_dream=map_structure(states, lambda x: flatten_batch(x.detach())[0])
-        # Note features_dream includes the starting "real" features at features_dream[0]
+        #     # states=post
+        #     flatten = lambda x: x.reshape([-1] + list(x.shape[2:]))
+        #     in_state_dream = {k: flatten(v) for k, v in states.items()}
+        #     # in_state_dream={key: tensor[0] for key, tensor in states.items()}
+        #     # in_state_dream=map_structure(states, lambda x: flatten_batch(x.detach())[0])
+        # # Note features_dream includes the starting "real" features at features_dream[0]
             features_dream, actions_dream, rewards_dream, terminals_dream, states_dream = \
-            self.dream(in_state_dream, H, self.ac._config.actor_grad == 'dynamics')
-            states_dream={key: tensor.detach() for key, tensor in states_dream.items()}
+            self.dream(in_state_dream, H, self.ac._conf.actor_grad == 'dynamics')
+            # states_dream={key: tensor.detach() for key, tensor in states_dream.items()}
         if self.wm_type=="v2":
             (loss_actor, loss_critic), metrics_ac, tensors_ac = \
                 self.ac.training_step(features_dream.detach(),
@@ -236,7 +245,8 @@ class Dreamer_agent(nn.Module):
                     # and here for inspection purposes we only dream from first step, so it's (H*B).
                     # Oh, and we set here H=T-1, so we get (T,B), and the dreamed experience aligns with actual.
                     # 这里实际做的时候，T=1，只从第一步想象
-                    in_state_dream={key: tensor[0] for key, tensor in states.items()}
+                    # in_state_dream={key: tensor[0] for key, tensor in states.items()}
+                    in_state_dream: StateB = map_structure(states, lambda x: x.detach()[0, :, 0])
                     ## 基本上只改了这一步
                     # non_zero_indices = torch.nonzero(in_state_dream[1])
 
@@ -312,11 +322,11 @@ class Dreamer_agent(nn.Module):
 
         ## 如果想设计一些简单的任务，比如说一直往左转，那么可以在这里修改action的选取
         for i in range(imag_horizon):
+            feature = self.wm.dynamics.to_feature(*state)
             if self.wm_type=='v2':
-                feature = self.wm.dynamics.to_feature(*state)
                 action_dist = self.ac.forward_actor(feature)
             elif self.wm_type=="v3":
-                feature = self.wm.dynamics.to_feature(state)
+                # feature = self.wm.dynamics.to_feature(state)
                 # feature=torch.cat((state[0], state[1]), -1)
                 action_dist = self.ac.actor(feature)
             if perturb=='guassian':
@@ -383,18 +393,18 @@ class Dreamer_agent(nn.Module):
             states.append(state)
             # When using dynamics gradients, this causes gradients in RSSM, which we don't want.
             # This is handled in backprop - the optimizer_model will ignore gradients from loss_actor.
-            if self.wm_type=='v2':
-                _, state = self.wm.dynamics.cell.forward_prior(action, None, state)
-            elif self.wm_type=='v3':
-                state=self.wm.dynamics.img_step(state,action)
+            # if self.wm_type=='v2':
+            _, state = self.wm.dynamics.cell.forward_prior(action, None, state)
+            # elif self.wm_type=='v3':
+            #     state=self.wm.dynamics.img_step(state,action)
 
-        if self.wm_type=='v2':
-                feature = self.wm.dynamics.to_feature(*state)
+        # if self.wm_type=='v2':
+            feature = self.wm.dynamics.to_feature(*state)
                 # action_dist = self.ac.forward_actor(feature)
-        elif self.wm_type=="v3":
-                feature = self.wm.dynamics.to_feature(state)
-                # feature=torch.cat((state[0], state[1]), -1)
-                # action_dist = self.ac.actor(feature)
+        # elif self.wm_type=="v3":
+        #         feature = self.wm.dynamics.to_feature(state)
+        #         # feature=torch.cat((state[0], state[1]), -1)
+        #         # action_dist = self.ac.actor(feature)
         features.append(feature)
         states.append(state)
         features = torch.stack(features)  # (H+1,TBI,D)
@@ -405,12 +415,12 @@ class Dreamer_agent(nn.Module):
             terminals = self.wm.decoder.terminal.forward(features)  # (H+1,TBI)
         elif self.wm_type=='v3':
             rewards=self.wm.heads["reward"](features).mode()
-            terminals=self.wm.heads["cont"](features).mode()
-            # 获取字典中的键
-            keys =states[0].keys()
+            terminals=self.wm.heads["terminal"](features).mode()
+            # # 获取字典中的键
+            # keys =states[0].keys()
 
-            # 为每个键堆叠张量
-            states = {key: torch.stack([d[key] for d in states]) for key in keys}
+            # # 为每个键堆叠张量
+            # states = {key: torch.stack([d[key] for d in states]) for key in keys}
 
         self.wm.requires_grad_(True)
         return features, actions, rewards, terminals,states
