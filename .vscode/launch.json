@@ -13,7 +13,7 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": ["--configs", "defaults_wis_v3","dreamer_v3", "atari", "atari_pong","--generator_prefill_steps", "2000"
-        ,"--save_interval","10","--generator_workers","1"],
+        ,"--save_interval","10","--generator_workers","1","--device","cuda:2"],
             // "args": [
             //     "--configs", 
             //     "atari100k", 

@@ -506,11 +506,12 @@ class DiscDist:
 
     def mean(self):
         _mean = self.probs * self.buckets
-        return self.transbwd(torch.sum(_mean, dim=-1, keepdim=True))
+        ## 为了统一格式，我把好几个地方的keepdim都给去了
+        return self.transbwd(torch.sum(_mean, dim=-1, keepdim=False))
 
     def mode(self):
         _mode = self.probs * self.buckets
-        return self.transbwd(torch.sum(_mode, dim=-1, keepdim=True))
+        return self.transbwd(torch.sum(_mode, dim=-1, keepdim=False))
 
     # Inside OneHotCategorical, log_prob is calculated using only max element in targets
     def log_prob(self, x):
@@ -539,7 +540,7 @@ class DiscDist:
         return (target * log_pred).sum(-1)
 
     def log_prob_target(self, target):
-        log_pred = super().logits - torch.logsumexp(super().logits, -1, keepdim=True)
+        log_pred = super().logits - torch.logsumexp(super().logits, -1, keepdim=False)
         return (target * log_pred).sum(-1)
 
 
@@ -700,7 +701,8 @@ class TanhBijector(torchd.Transform):
 
 
 def static_scan_for_lambda_return(fn, inputs, start):
-    last = start
+    # last = start
+    last=start
     indices = range(inputs[0].shape[0])
     indices = reversed(indices)
     flag = True
@@ -709,11 +711,13 @@ def static_scan_for_lambda_return(fn, inputs, start):
         inp = lambda x: (_input[x] for _input in inputs)
         last = fn(last, *inp(index))
         if flag:
-            outputs = last
+            # outputs = last
+            outputs = last.unsqueeze(-1)
             flag = False
         else:
-            outputs = torch.cat([outputs, last], dim=-1)
-    outputs = torch.reshape(outputs, [outputs.shape[0], outputs.shape[1], 1])
+            tmp_last=last.unsqueeze(-1)
+            outputs = torch.cat([outputs, tmp_last], dim=-1)
+    # outputs = torch.reshape(outputs, [outputs.shape[0], outputs.shape[1], 1])
     outputs = torch.flip(outputs, [1])
     outputs = torch.unbind(outputs, dim=0)
     return outputs

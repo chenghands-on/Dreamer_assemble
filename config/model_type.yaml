@@ -27,7 +27,7 @@ dreamer_v3:
   # a2c.
   discount: 0.997
   imag_gradient_mix: '0.0'
-  actor_dist: 'normal'
+  # actor_dist: 'normal'
   actor_entropy: 0.0003
   actor_state_entropy: 0.0
   actor_init_std: 1.0

@@ -221,6 +221,7 @@ def run(conf,space):
                     # Metrics
 
                     for k, v in loss_metrics.items():
+                        # print(k)
                         if isinstance(v, (np.ndarray, torch.Tensor)):
                             # 如果 v 是数组或张量，则提取单个值
                             value = v.item()
@@ -458,6 +459,7 @@ def prepare_batch_npz(data: Dict[str, Tensor], take_b=999):
         # if take_b < val.shape[1]:
         #     val = val[:, :take_b]
         try:
+            print(key)
     # 尝试访问 shape 属性
             if take_b < val.shape[1]:
                 val = val[:, :take_b]

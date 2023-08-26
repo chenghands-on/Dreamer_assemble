@@ -47,6 +47,8 @@ class Dreamer_agent(nn.Module):
                               )
         elif self.wm_type=='v3':
             self.ac=ActorCritic_v3(conf,self.wm,self._device)
+            #  self.ac = ActorCritic_v2(conf
+            #                   )
 
 
         
@@ -117,11 +119,16 @@ class Dreamer_agent(nn.Module):
             value=self.ac.forward_value(feature)
             metrics = dict(policy_value=value.detach().mean())
         elif self.wm_type=='v3':
-            feature = features[0, :, :] ##features.shape(1,1,1536)T*B*(D+S)
-            action_distr = self.ac.actor(feature)  # (1,B,A)
+            feature = features[:, :, 0]
+            # feature = features[0, :, :] ##features.shape(1,1,1536)T*B*(D+S)
+            action_distr = self.ac.forward_actor(feature)  # (1,B,A)
             value = self.ac.critic(feature)  # (1,B)
             metrics={}
-            metrics.update(tensorstats(value.mode(), "policy_value"))
+            metrics.update(tensorstats(value.mode().detach(), "policy_value"))
+            # feature = features[:, :, 0]  # (T=1,B,I=1,F) => (1,B,F) ## features.shape(1,1,1,2048)T*B*I*(D+S)
+            # action_distr=self.ac.forward_actor(feature)
+            # value=self.ac.forward_value(feature)
+            # metrics = dict(policy_value=value.detach().mean())
         
         return action_distr, out_state, metrics
 
@@ -173,19 +180,19 @@ class Dreamer_agent(nn.Module):
         
         in_state_dream: StateB = map_structure(states, lambda x: flatten_batch(x.detach())[0]) 
         # type: ignore  # (T,B,I) => (TBI)
-        if self.wm_type=='v2':
-            features_dream, actions_dream, rewards_dream, terminals_dream, states_dream = \
-            self.dream(in_state_dream, H, self.ac.actor_grad == 'dynamics')  # (H+1,TBI,D)
+        # if self.wm_type=='v2':
+        features_dream, actions_dream, rewards_dream, terminals_dream, states_dream = \
+        self.dream(in_state_dream, H, self.ac._conf.actor_grad == 'dynamics')  # (H+1,TBI,D)
         
-        elif self.wm_type=='v3':
-        #     # states=post
-        #     flatten = lambda x: x.reshape([-1] + list(x.shape[2:]))
-        #     in_state_dream = {k: flatten(v) for k, v in states.items()}
-        #     # in_state_dream={key: tensor[0] for key, tensor in states.items()}
-        #     # in_state_dream=map_structure(states, lambda x: flatten_batch(x.detach())[0])
-        # # Note features_dream includes the starting "real" features at features_dream[0]
-            features_dream, actions_dream, rewards_dream, terminals_dream, states_dream = \
-            self.dream(in_state_dream, H, self.ac._conf.actor_grad == 'dynamics')
+        # elif self.wm_type=='v3':
+        # #     # states=post
+        # #     flatten = lambda x: x.reshape([-1] + list(x.shape[2:]))
+        # #     in_state_dream = {k: flatten(v) for k, v in states.items()}
+        # #     # in_state_dream={key: tensor[0] for key, tensor in states.items()}
+        # #     # in_state_dream=map_structure(states, lambda x: flatten_batch(x.detach())[0])
+        # # # Note features_dream includes the starting "real" features at features_dream[0]
+        #     features_dream, actions_dream, rewards_dream, terminals_dream, states_dream = \
+        #     self.dream(in_state_dream, H, self.ac._conf.actor_grad == 'dynamics')
             # states_dream={key: tensor.detach() for key, tensor in states_dream.items()}
         if self.wm_type=="v2":
             (loss_actor, loss_critic), metrics_ac, tensors_ac = \
@@ -195,86 +202,95 @@ class Dreamer_agent(nn.Module):
                                     terminals_dream.mean.detach())
             tensors.update(policy_value=unflatten_batch(tensors_ac['value'][0], (T, B, I)).mean(-1))
         elif self.wm_type=="v3":
-             (loss_actor, loss_critic), features, actions,metrics_ac, tensors_ac = \
+            #  (loss_actor, loss_critic), features, actions,metrics_ac, tensors_ac = \
+            #     self.ac.training_step(features_dream.detach(),
+            #                         actions_dream.detach(),
+            #                         rewards_dream.detach(),
+            #                         terminals_dream.detach(),
+            #                         # states_dream
+            #                         )
+            (loss_actor, loss_critic), metrics_ac, tensors_ac = \
                 self.ac.training_step(features_dream.detach(),
                                     actions_dream.detach(),
-                                    rewards_dream.detach(),
-                                    terminals_dream.detach(),
-                                    states_dream)
+                                    rewards_dream.mean.detach(),
+                                    terminals_dream.mean.detach())
+            # tensors.update(policy_value=unflatten_batch(tensors_ac['value'][0], (T, B, I)).mean(-1))
         metrics.update(**metrics_ac)
        
 
         # Dream for a log sample.
         ## 扰动和刻意的action应该都可以在这里加。
         dream_tensors = {}
-        if self.wm=="v2":
-            if do_dream_tensors and self.wm.decoder.image is not None:
-                with torch.no_grad():  # careful not to invoke modules first time under no_grad (https://github.com/pytorch/pytorch/issues/60164)
-                    # The reason we don't just take real features_dream is because it's really big (H*T*B*I),
-                    # and here for inspection purposes we only dream from first step, so it's (H*B).
-                    # Oh, and we set here H=T-1, so we get (T,B), and the dreamed experience aligns with actual.
-                    # 这里实际做的时候，T=1，只从第一步想象
-                    in_state_dream: StateB = map_structure(states, lambda x: x.detach()[0, :, 0])  # type: ignore  # (T,B,I) => (B)
-                    ## 基本上只改了这一步
-                    # non_zero_indices = torch.nonzero(in_state_dream[1])
+        # if self.wm=="v2":
+        if do_dream_tensors and self.wm.decoder.image is not None:
+            with torch.no_grad():  # careful not to invoke modules first time under no_grad (https://github.com/pytorch/pytorch/issues/60164)
+                # The reason we don't just take real features_dream is because it's really big (H*T*B*I),
+                # and here for inspection purposes we only dream from first step, so it's (H*B).
+                # Oh, and we set here H=T-1, so we get (T,B), and the dreamed experience aligns with actual.
+                # 这里实际做的时候，T=1，只从第一步想象
+                in_state_dream: StateB = map_structure(states, lambda x: x.detach()[0, :, 0])  # type: ignore  # (T,B,I) => (B)
+                ## 基本上只改了这一步
+                # non_zero_indices = torch.nonzero(in_state_dream[1])
 
-                    # print(non_zero_indices)
-                    features_dream, actions_dream, rewards_dream, terminals_dream,states_dream = self.dream(in_state_dream, T - 1)  # H = T-1
-                    # features_dream, actions_dream, rewards_dream, terminals_dream = self.dream_cond_action(in_state_dream, obs['action'])
-                    image_dream = self.wm.decoder.image.forward(features_dream)
-                    ## 拿Dreamer_agent的数据只训练actor_critic
-                    # _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream[1:,:,:], rewards_dream.mean, terminals_dream.mean, log_only=True)
-                    _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mean, terminals_dream.mean, log_only=True)
-                    # The tensors are intentionally named same as in tensors, so the logged npz looks the same for dreamed or not
-                    # dream_tensors = dict(action_pred=actions_dream,  # first action is real from previous step
-                    #                      reward_pred=rewards_dream.mean,
-                    #                      terminal_pred=terminals_dream.mean,
-                    #                      image_pred=image_dream,
-                    #                      **tensors_ac)
-                    dream_tensors = dict(action_pred=torch.cat([obs['action'][:1], actions_dream]),  # first action is real from previous step
-                                        reward_pred=rewards_dream.mean,
-                                        terminal_pred=terminals_dream.mean,
-                                        image_pred=image_dream,
-                                        **tensors_ac)
-                    assert dream_tensors['action_pred'].shape == obs['action'].shape
-                    assert dream_tensors['image_pred'].shape == obs['image'].shape
-        elif self.wm_type=="v3":
-            if do_dream_tensors:
-                with torch.no_grad():  # careful not to invoke modules first time under no_grad (https://github.com/pytorch/pytorch/issues/60164)
-                    # The reason we don't just take real features_dream is because it's really big (H*T*B*I),
-                    # and here for inspection purposes we only dream from first step, so it's (H*B).
-                    # Oh, and we set here H=T-1, so we get (T,B), and the dreamed experience aligns with actual.
-                    # 这里实际做的时候，T=1，只从第一步想象
-                    # in_state_dream={key: tensor[0] for key, tensor in states.items()}
-                    in_state_dream: StateB = map_structure(states, lambda x: x.detach()[0, :, 0])
-                    ## 基本上只改了这一步
-                    # non_zero_indices = torch.nonzero(in_state_dream[1])
+                # print(non_zero_indices)
+                features_dream, actions_dream, rewards_dream, terminals_dream,states_dream = self.dream(in_state_dream, T - 1)  # H = T-1
+                # features_dream, actions_dream, rewards_dream, terminals_dream = self.dream_cond_action(in_state_dream, obs['action'])
+                image_dream = self.wm.decoder.image.forward(features_dream)
+                ## 拿Dreamer_agent的数据只训练actor_critic
+                # _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream[1:,:,:], rewards_dream.mean, terminals_dream.mean, log_only=True)
+                _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mean, terminals_dream.mean, log_only=True)
+                # The tensors are intentionally named same as in tensors, so the logged npz looks the same for dreamed or not
+                # dream_tensors = dict(action_pred=actions_dream,  # first action is real from previous step
+                #                      reward_pred=rewards_dream.mean,
+                #                      terminal_pred=terminals_dream.mean,
+                #                      image_pred=image_dream,
+                #                      **tensors_ac)
+                dream_tensors = dict(action_pred=torch.cat([obs['action'][:1], actions_dream]),  # first action is real from previous step
+                                    reward_pred=rewards_dream.mean,
+                                    terminal_pred=terminals_dream.mean,
+                                    image_pred=image_dream,
+                                    **tensors_ac)
+                assert dream_tensors['action_pred'].shape == obs['action'].shape
+                assert dream_tensors['image_pred'].shape == obs['image'].shape
+        # elif self.wm_type=="v3":
+        #     if do_dream_tensors:
+        #         with torch.no_grad():  # careful not to invoke modules first time under no_grad (https://github.com/pytorch/pytorch/issues/60164)
+        #             # The reason we don't just take real features_dream is because it's really big (H*T*B*I),
+        #             # and here for inspection purposes we only dream from first step, so it's (H*B).
+        #             # Oh, and we set here H=T-1, so we get (T,B), and the dreamed experience aligns with actual.
+        #             # 这里实际做的时候，T=1，只从第一步想象
+        #             # in_state_dream={key: tensor[0] for key, tensor in states.items()}
+        #             in_state_dream: StateB = map_structure(states, lambda x: x.detach()[0, :, 0])
+        #             ## 基本上只改了这一步
+        #             # non_zero_indices = torch.nonzero(in_state_dream[1])
 
-                    # print(non_zero_indices)
-                    features_dream, actions_dream, rewards_dream, terminals_dream,states_dream = self.dream(in_state_dream, T - 1)  # H = T-1
-                    # features_dream, actions_dream, rewards_dream, terminals_dream = self.dream_cond_action(in_state_dream, obs['action'])
-                    image_dream= self.wm.heads["decoder"](features_dream)["image"].mode()
-                    ## 拿Dreamer_agent的数据只训练actor_critic
-                    # _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream[1:,:,:], rewards_dream.mean, terminals_dream.mean, log_only=True)
-                    # _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mean, terminals_dream.mean, log_only=True)
-                    # (actor_loss,value_loss),features, states, actions, metrics=self.ac.training_step(features_dream.detach(),
-                    #                 actions_dream.detach(),
-                    #                 rewards_dream.detach(),
-                    #                 terminals_dream.detach(),
-                    #                 states_dream)
-                    # The tensors are intentionally named same as in tensors, so the logged npz looks the same for dreamed or not
-                    # dream_tensors = dict(action_pred=actions_dream,  # first action is real from previous step
-                    #                      reward_pred=rewards_dream.mean,
-                    #                      terminal_pred=terminals_dream.mean,
-                    #                      image_pred=image_dream,
-                    #                      **tensors_ac)
-                    dream_tensors = dict(action_pred=torch.cat([obs['action'][:1], actions_dream]),  # first action is real from previous step
-                                        reward_pred=rewards_dream,
-                                        terminal_pred=terminals_dream,
-                                        image_pred=image_dream,
-                                        )
-                    assert dream_tensors['action_pred'].shape == obs['action'].shape
-                    assert dream_tensors['image_pred'].shape == obs['image'].shape
+        #             # print(non_zero_indices)
+        #             features_dream, actions_dream, rewards_dream, terminals_dream,states_dream = self.dream(in_state_dream, T - 1)  # H = T-1
+        #             # features_dream, actions_dream, rewards_dream, terminals_dream = self.dream_cond_action(in_state_dream, obs['action'])
+        #             # image_dream= self.wm.heads["decoder"](features_dream)["image"].mode()
+        #             image_dream = self.wm.decoder.image.forward(features_dream)
+        #             _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mode(), terminals_dream.mode(), log_only=True)
+        #             ## 拿Dreamer_agent的数据只训练actor_critic
+        #             # _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream[1:,:,:], rewards_dream.mean, terminals_dream.mean, log_only=True)
+        #             # _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mean, terminals_dream.mean, log_only=True)
+        #             # (actor_loss,value_loss),features, states, actions, metrics=self.ac.training_step(features_dream.detach(),
+        #             #                 actions_dream.detach(),
+        #             #                 rewards_dream.detach(),
+        #             #                 terminals_dream.detach(),
+        #             #                 states_dream)
+        #             # The tensors are intentionally named same as in tensors, so the logged npz looks the same for dreamed or not
+        #             # dream_tensors = dict(action_pred=actions_dream,  # first action is real from previous step
+        #             #                      reward_pred=rewards_dream.mean,
+        #             #                      terminal_pred=terminals_dream.mean,
+        #             #                      image_pred=image_dream,
+        #             #                      **tensors_ac)
+        #             dream_tensors = dict(action_pred=torch.cat([obs['action'][:1], actions_dream]),  # first action is real from previous step
+        #                                 reward_pred=rewards_dream.mode(),
+        #                                 terminal_pred=terminals_dream.mode(),
+        #                                 image_pred=image_dream,
+        #                                 )
+        #             assert dream_tensors['action_pred'].shape == obs['action'].shape
+        #             assert dream_tensors['image_pred'].shape == obs['image'].shape
         if not self.probe_gradients:
             losses = (loss_model, loss_probe, loss_actor, loss_critic)
         else:
@@ -328,7 +344,7 @@ class Dreamer_agent(nn.Module):
             elif self.wm_type=="v3":
                 # feature = self.wm.dynamics.to_feature(state)
                 # feature=torch.cat((state[0], state[1]), -1)
-                action_dist = self.ac.actor(feature)
+                action_dist = self.ac.forward_actor(feature)
             if perturb=='guassian':
                 # Get the batch shape and event shape of the given distribution.
                 batch_shape = action_dist.batch_shape
@@ -410,12 +426,13 @@ class Dreamer_agent(nn.Module):
         features = torch.stack(features)  # (H+1,TBI,D)
         actions = torch.stack(actions)  # (H,TBI,A)
         # states=torch.stack(states)
-        if self.wm_type=='v2':
-            rewards = self.wm.decoder.reward.forward(features)      # (H+1,TBI)
-            terminals = self.wm.decoder.terminal.forward(features)  # (H+1,TBI)
-        elif self.wm_type=='v3':
-            rewards=self.wm.heads["reward"](features).mode()
-            terminals=self.wm.heads["terminal"](features).mode()
+        # if self.wm_type=='v2':
+            ##返回的是一个分布
+        rewards = self.wm.decoder.reward.forward(features)      # (H+1,TBI)
+        terminals = self.wm.decoder.terminal.forward(features)  # (H+1,TBI)
+        # elif self.wm_type=='v3':
+        #     rewards=self.wm.heads["reward"](features)
+        #     terminals=self.wm.heads["terminal"](features)
             # # 获取字典中的键
             # keys =states[0].keys()
 
@@ -434,7 +451,7 @@ class Dreamer_agent(nn.Module):
                 if submodel is not None:
                     s.append(f'  {type(submodel).__name__:<15}: {param_count(submodel)} parameters')
         elif self.wm_type=="v3":
-            for submodel in (self.wm.encoder, self.wm.heads, self.wm.dynamics):
+            for submodel in (self.wm.encoder, self.wm.decoder, self.wm.dynamics,self.ac):
                 if submodel is not None:
                     s.append(f'  {type(submodel).__name__:<15}: {param_count(submodel)} parameters')
         return '\n'.join(s)
