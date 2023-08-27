@@ -642,6 +642,8 @@ class Bernoulli:
 
     def log_prob(self, x):
         _logits = self._dist.base_dist.logits
+        if _logits.shape[-1]==1:
+            _logits=_logits.squeeze(-1)
         log_probs0 = -F.softplus(_logits)
         log_probs1 = -F.softplus(-_logits)
 

@@ -125,7 +125,8 @@ class MultiDecoder_v3(nn.Module):
         image_dist,
         vector_dist,
     ):
-        super(MultiDecoder_v3, self).__init__()
+        super().__init__()
+        ## image decoder part
         excluded = ("reset", "is_last", "terminal", "reward")
         shapes = {k: v for k, v in shapes.items() if k not in excluded}
         self.cnn_shapes = {
@@ -136,8 +137,8 @@ class MultiDecoder_v3(nn.Module):
             for k, v in shapes.items()
             if len(v) in (1, 2) and re.match(mlp_keys, k)
         }
-        print("Decoder CNN shapes:", self.cnn_shapes)
-        print("Decoder MLP shapes:", self.mlp_shapes)
+        print("Image Decoder CNN shapes:", self.cnn_shapes)
+        print("Image Decoder MLP shapes:", self.mlp_shapes)
 
         if self.cnn_shapes:
             some_shape = list(self.cnn_shapes.values())[0]

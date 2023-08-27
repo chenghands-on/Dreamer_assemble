@@ -108,7 +108,7 @@ defaults_wis_v3:
   grad_heads: ['decoder', 'reward', 'terminal']
   units: 512
   reward_layers: 2
-  cont_layers: 2
+  terminal_layers: 2
   value_layers: 2
   actor_layers: 2
   act: 'SiLU'
@@ -122,7 +122,7 @@ defaults_wis_v3:
   dyn_scale: '0.5'
   rep_scale: '0.1'
   kl_free: '1.0'
-  cont_scale: 1.0
+  terminal_scale: 1.0
   reward_scale: 1.0
   weight_decay: 0.0
   unimix_ratio: 0.01

@@ -258,65 +258,64 @@ class WorldModel_v3(nn.Module):
                              layer_norm=conf.layer_norm,
                              tidy=conf.tidy)
         # dECODERS FOR IMAGE,REWARDS and counts
-        features_dim = conf.deter_dim + conf.stoch_dim * (conf.stoch_discrete or 1)
-        self.decoder = MultiDecoder_v2(features_dim, conf)
-        # self.heads = nn.ModuleDict()
-        # if conf.dyn_discrete:
-        #     # feat_size = conf.dyn_stoch * conf.dyn_discrete + conf.dyn_deter
-        #     feat_size=conf.deter_dim+conf.stoch_dim * (conf.stoch_discrete or 1)
-        # else:
-        #     # feat_size = conf.dyn_stoch + conf.dyn_deter
-        #     feat_size=conf.deter_dim+conf.stoch_dim
-        # self.heads["decoder"] = MultiDecoder_v3(
-        #     feat_size, shapes, **conf.decoder
+        # self.decoder = MultiDecoder_v2(features_dim, conf)
+        self.heads = nn.ModuleDict()
+        if conf.dyn_discrete:
+            # features_dim = conf.dyn_stoch * conf.dyn_discrete + conf.dyn_deter
+            features_dim=conf.deter_dim+conf.stoch_dim * (conf.stoch_discrete or 1)
+        else:
+            # features_dim = conf.dyn_stoch + conf.dyn_deter
+            features_dim=conf.deter_dim+conf.stoch_dim
+        self.heads["decoder"] = MultiDecoder_v3(
+            features_dim, shapes, **conf.decoder
+        )
+        if conf.reward_head == "symlog_disc":
+            self.heads["reward"] = MLP_v3(
+                features_dim,  # pytorch version
+                (255,),
+                conf.reward_layers,
+                conf.units,
+                conf.act,
+                conf.norm,
+                dist=conf.reward_head,
+                outscale=0.0,
+                device=self._device,
+            )
+        else:
+            self.heads["reward"] = MLP_v3(
+                features_dim,  # pytorch version
+                [],
+                conf.reward_layers,
+                conf.units,
+                conf.act,
+                conf.norm,
+                dist=conf.reward_head,
+                outscale=0.0,
+                device=self._device,
+            )
+        self.heads["terminal"] = MLP_v3(
+            features_dim,  # pytorch version
+            [],
+            conf.terminal_layers,
+            conf.units,
+            conf.act,
+            conf.norm,
+            dist="binary",
+            device=self._device,
+        )
+        for name in conf.grad_heads:
+            assert name in self.heads, name
+        # self._model_opt = tools_v3.Optimizer(
+        #     "model",
+        #     self.parameters(),
+        #     conf.model_lr,
+        #     conf.opt_eps,
+        #     conf.grad_clip,
+        #     conf.weight_decay,
+        #     opt=conf.opt,
+        #     use_amp=self._use_amp,
         # )
-        # if conf.reward_head == "symlog_disc":
-        #     self.heads["reward"] = MLP_v3(
-        #         feat_size,  # pytorch version
-        #         (255,),
-        #         conf.reward_layers,
-        #         conf.units,
-        #         conf.act,
-        #         conf.norm,
-        #         dist=conf.reward_head,
-        #         outscale=0.0,
-        #         device=self._device,
-        #     )
-        # else:
-        #     self.heads["reward"] = MLP_v3(
-        #         feat_size,  # pytorch version
-        #         [],
-        #         conf.reward_layers,
-        #         conf.units,
-        #         conf.act,
-        #         conf.norm,
-        #         dist=conf.reward_head,
-        #         outscale=0.0,
-        #         device=self._device,
-        #     )
-        # self.heads["terminal"] = MLP_v3(
-        #     feat_size,  # pytorch version
-        #     [],
-        #     conf.cont_layers,
-        #     conf.units,
-        #     conf.act,
-        #     conf.norm,
-        #     dist="binary",
-        #     device=self._device,
-        # )
-        # for name in conf.grad_heads:
-        #     assert name in self.heads, name
-        # # self._model_opt = tools_v3.Optimizer(
-        # #     "model",
-        # #     self.parameters(),
-        # #     conf.model_lr,
-        # #     conf.opt_eps,
-        # #     conf.grad_clip,
-        # #     conf.weight_decay,
-        # #     opt=conf.opt,
-        # #     use_amp=self._use_amp,
-        # # )
-        # self._scales = dict(reward=conf.reward_scale, cont=conf.cont_scale)
+        self._scales = dict(reward=conf.reward_scale, cont=conf.terminal_scale)
         
     def init_state(self, batch_size: int) -> Tuple[Any, Any]:
         return self.dynamics.init_state(batch_size)
@@ -343,7 +342,7 @@ class WorldModel_v3(nn.Module):
         # image (batch_size, batch_length, h, w, ch)
         # reward (batch_size, batch_length)
         # discount (batch_size, batch_length)
-        # obs = self.preprocess(obs,forward_only=True)
+        obs = self.preprocess(obs,forward_only=True)
         # with tools_v3.RequiresGrad(self):
             # with torch.cuda.amp.autocast(self._use_amp):
             
@@ -372,8 +371,19 @@ class WorldModel_v3(nn.Module):
             return torch.tensor(0.0), features, states, out_state, {}, {}
         
         
-        # Decoder
-        loss_reconstr, metrics, tensors = self.decoder.training_step(features, obs)
+        # # Decoder
+        preds={}
+        for name, head in self.heads.items():
+            grad_head = name in self._conf.grad_heads
+            # features = self.dynamics.to_feature(post)
+            features = features if grad_head else features.detach()
+            features_decoder=features[:,:,0]
+            pred = head(features_decoder)
+            if type(pred) is dict:
+                preds.update(pred)
+            else:
+                preds[name] = pred
+        # loss_reconstr, metrics, tensors = self.decoder.training_step(features, obs)
         # KL loss
         kl_free = tools_v3.schedule(self._conf.kl_free, self._step)
         dyn_scale = tools_v3.schedule(self._conf.dyn_scale, self._step)
@@ -381,7 +391,6 @@ class WorldModel_v3(nn.Module):
         # kl_loss, kl_value, dyn_loss, rep_loss = self.dynamics.kl_loss(
         #     post, prior, kl_free, dyn_scale, rep_scale
         # )
-        # preds = {}
         d = self.dynamics.zdistr
         dprior = d(prior)
         dpost = d(post)
@@ -399,57 +408,48 @@ class WorldModel_v3(nn.Module):
             dyn_loss = torch.clip(loss_kl_priograd, min=kl_free)
             loss_kl = dyn_scale * dyn_loss + rep_scale * rep_loss
             
-        # # decoder
-        # preds={}
-        # for name, head in self.heads.items():
-        #     grad_head = name in self._conf.grad_heads
-        #     # features = self.dynamics.to_feature(post)
-        #     features = features if grad_head else features.detach()
-        #     features_decoder=features[:,:,0]
-        #     pred = head(features_decoder)
-        #     if type(pred) is dict:
-        #         preds.update(pred)
-        #     else:
-        #         preds[name] = pred
+       
                 
-        # # Decoder Loss
-        # losses = {}
-        # for name, pred in preds.items():
-        #     # pred=pred[:,:,0] ##把iwae sample给去掉
-        #     # I = features.shape[2]
-        #     # target = insert_dim(obs[name], 2, I)  # Expand target with iwae_samples dim, because features have it
-        #     like = pred.log_prob(obs[name])
-        #     losses[name] = -torch.mean(like) * self._scales.get(name, 1.0)
+        # Decoder Loss
+        losses = {}
+        for name, pred in preds.items():
+            # pred=pred[:,:,0] ##把iwae sample给去掉
+            # I = features.shape[2]
+            # target = insert_dim(obs[name], 2, I)  # Expand target with iwae_samples dim, because features have it
+            like = pred.log_prob(obs[name])
+            losses[name] = -torch.mean(like) * self._scales.get(name, 1.0)
         
         # Total loss
 
-        assert loss_kl.shape == loss_reconstr.shape
-        loss_model_tbi = self.kl_weight * loss_kl + loss_reconstr
-        model_loss = -logavgexp(-loss_model_tbi, dim=2).mean()
+        # assert loss_kl.shape == loss_reconstr.shape
+        # loss_model_tbi = self.kl_weight * loss_kl + loss_reconstr
+        # model_loss = -logavgexp(-loss_model_tbi, dim=2).mean()
         # loss = loss_model.mean() + self.aux_critic_weight * loss_critic_aux
             
-        # loss_kl=torch.mean(loss_kl)
-        # model_loss = sum(losses.values()) + self.kl_weight * loss_kl
+        loss_kl=torch.mean(loss_kl)
+        model_loss = sum(losses.values()) + self.kl_weight * loss_kl
         #     metrics = self._model_opt(model_loss, self.parameters())
         
         
         # Metrics
         with torch.no_grad():
-            # tensors = {}
-            # metrics = {}
+            tensors = {}
+            metrics = {}
             metrics["loss_model"] = model_loss.detach().cpu().numpy()
-            # metrics.update({f"{name}_loss": to_np(loss) for name, loss in losses.items()})
+            metrics.update({f"{name}_loss": to_np(loss) for name, loss in losses.items()})
             metrics["kl_free"] = kl_free
             metrics["dyn_scale"] =dyn_scale
             metrics["rep_scale"] = rep_scale
             metrics["loss_dyn"] = to_np(torch.mean(dyn_loss))
             metrics["loss_rep"] = to_np(torch.mean(rep_loss))
-            metrics["loss_kl"] = to_np(torch.mean(loss_kl))
-            entropy_prior = dprior.entropy().mean(dim=2)
-            entropy_post = dpost.entropy().mean(dim=2)
-            tensors.update(loss_kl=loss_kl.detach(),
-                           entropy_prior=entropy_prior,
-                           entropy_post=entropy_post)
+            # metrics["loss_kl"] = to_np(torch.mean(loss_kl))
+            metrics["loss_kl"] = to_np(loss_kl)
+            # v2的东西
+            # entropy_prior = dprior.entropy().mean(dim=2)
+            # entropy_post = dpost.entropy().mean(dim=2)
+            # tensors.update(loss_kl=loss_kl.detach(),
+            #                entropy_prior=entropy_prior,
+            #                entropy_post=entropy_post)
             # metrics["kl"] = to_np(torch.mean(kl_value))
         # with torch.cuda.amp.autocast(self._use_amp):
             # metrics["prior_ent"] = to_np(
@@ -469,47 +469,50 @@ class WorldModel_v3(nn.Module):
         
         # Predictions
         if do_image_pred:
-        #     prior_samples = self.dynamics.zdistr(prior).sample().reshape(post_samples.shape)
-        #     features_prior = self.dynamics.feature_replace_z(features, prior_samples)
-        #     openl = self.heads["decoder"](features_prior)["image"].mode()
-        #     reward_prior = self.heads["reward"](features_prior).mode()
-        #     # observed image is given until 5 steps
-        #     # model = torch.cat([recon[:5, :6], openl], 0)
-        #     model=openl[:,:,0]
-        #     # truth = obs["image"] + 0.5
-        #     # model = model + 0.5
-        #     truth=obs['image']
-        #     error = (model - truth + 1.0) / 2.0
+            prior_samples = self.dynamics.zdistr(prior).sample().reshape(post_samples.shape)
+            features_prior = self.dynamics.feature_replace_z(features, prior_samples)
+            openl = self.heads["decoder"](features_prior)["image"].mode()
+            reward_prior = self.heads["reward"](features_prior).mode()
+            # observed image is given until 5 steps
+            # model = torch.cat([recon[:5, :6], openl], 0)
+            model=openl[:,:,0]
+            # truth = obs["image"] + 0.5
+            # model = model + 0.5
+            truth=obs['image']
+            error = (model - truth + 1.0) / 2.0
         
-        # # train 中已有函数保存original data了
-        # # tensors.update(data)
-        #     tensors["image_pred"]=model.detach()
-        #     tensors["image_error"]=error.detach()
-            with torch.no_grad():
-                prior_samples = self.dynamics.zdistr(prior).sample().reshape(post_samples.shape)
-                features_prior = self.dynamics.feature_replace_z(features, prior_samples)
-                # Decode from prior(就是没有看到xt，凭借ht直接给出的预测)
-                _, mets, tens = self.decoder.training_step(features_prior, obs, extra_metrics=True)
-                metrics_logprob = {k.replace('loss_', 'logprob_'): v for k, v in mets.items() if k.startswith('loss_')}
-                tensors_logprob = {k.replace('loss_', 'logprob_'): v for k, v in tens.items() if k.startswith('loss_')}
-                tensors_pred = {k.replace('_rec', '_pred'): v for k, v in tens.items() if k.endswith('_rec')}
-                metrics.update(**metrics_logprob)   # logprob_image, ...
-                tensors.update(**tensors_logprob)  # logprob_image, ...
-                tensors.update(**tensors_pred)  # image_pred, ...
+        # train 中已有函数保存original data了
+        # tensors.update(data)
+            tensors["image_pred"]=model.detach()
+            tensors["image_error"]=error.detach()
+            # with torch.no_grad():
+            #     prior_samples = self.dynamics.zdistr(prior).sample().reshape(post_samples.shape)
+            #     features_prior = self.dynamics.feature_replace_z(features, prior_samples)
+            #     # Decode from prior(就是没有看到xt，凭借ht直接给出的预测)
+            #     _, mets, tens = self.decoder.training_step(features_prior, obs, extra_metrics=True)
+            #     metrics_logprob = {k.replace('loss_', 'logprob_'): v for k, v in mets.items() if k.startswith('loss_')}
+            #     tensors_logprob = {k.replace('loss_', 'logprob_'): v for k, v in tens.items() if k.startswith('loss_')}
+            #     tensors_pred = {k.replace('_rec', '_pred'): v for k, v in tens.items() if k.endswith('_rec')}
+            #     metrics.update(**metrics_logprob)   # logprob_image, ...
+            #     tensors.update(**tensors_logprob)  # logprob_image, ...
+            #     tensors.update(**tensors_pred)  # image_pred, ...
         return model_loss,features, states, out_state, metrics,tensors
 
     def preprocess(self, obs,forward_only=False):
         obs = obs.copy()
         obs["image"] = torch.Tensor(obs["image"]) / 255.0 - 0.5
         # (batch_size, batch_length) -> (batch_size, batch_length, 1)
-        obs["reward"] = torch.Tensor(obs["reward"]).unsqueeze(-1)
+        # obs["reward"] = torch.Tensor(obs["reward"]).unsqueeze(-1)
+        obs["reward"] = torch.Tensor(obs["reward"])
         if "discount" in obs:
             obs["discount"] *= self._conf.discount
             # (batch_size, batch_length) -> (batch_size, batch_length, 1) 
-            obs["discount"] = torch.Tensor(obs["discount"]).unsqueeze(-1)
+            # obs["discount"] = torch.Tensor(obs["discount"]).unsqueeze(-1)
+            obs["discount"] = torch.Tensor(obs["discount"])
         if "terminal" in obs:
             # this label is necessary to train cont_head for Bernoulli操作
-            obs["terminal"] = torch.Tensor(1.0 - obs["terminal"]).unsqueeze(-1)
+            # obs["terminal"] = torch.Tensor(1.0 - obs["terminal"]).unsqueeze(-1)
+            obs["terminal"] = torch.Tensor(obs["terminal"])
         else:
             raise ValueError('"terminal" was not found in observation.')
         if not forward_only:

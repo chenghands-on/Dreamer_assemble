@@ -188,78 +188,78 @@ class ConvEncoder(nn.Module):
     def __init__(self, input_shape, wm_type,cnn_depth=32, act="SiLU",norm="LayerNorm",minres=4,kernel_size=4):
         super().__init__()
         self.wm_type=wm_type
-        if wm_type=="v2":
-            h,w,input_ch= input_shape
-            activation=nn.ELU
-            self.out_dim = cnn_depth * 32
-           
-            stride = 2
-            #中间层的channer数
-            d = cnn_depth
-            self.layers = nn.Sequential(
-                nn.Conv2d(input_ch, d, kernel_size, stride),
-                activation(),
-                nn.Conv2d(d, d * 2, kernel_size, stride),
-                activation(),
-                nn.Conv2d(d * 2, d * 4, kernel_size, stride),
-                activation(),
-                nn.Conv2d(d * 4, d * 8, kernel_size, stride),
-                activation(),
-                nn.Flatten()
-            )
-        elif wm_type=="v3":
-            h, w, input_ch = input_shape
-            act = getattr(torch.nn, act)
-            norm = getattr(torch.nn, norm)
-            layers = []
-            for i in range(int(np.log2(h) - np.log2(minres))):
-                if i == 0:
-                    in_dim = input_ch
-                else:
-                    in_dim = 2 ** (i - 1) * cnn_depth
-                out_dim = 2**i * cnn_depth
-                layers.append(
-                    Conv2dSame(
-                        in_channels=in_dim,
-                        out_channels=out_dim,
-                        kernel_size=kernel_size,
-                        stride=2,
-                        bias=False,
-                    )
-                )
-                layers.append(ChLayerNorm(out_dim))
-                layers.append(act())
-                h, w = h // 2, w // 2
+        # if wm_type=="v2":
+        h,w,input_ch= input_shape
+        activation=nn.ELU
+        self.out_dim = cnn_depth * 32
+        
+        stride = 2
+        #中间层的channer数
+        d = cnn_depth
+        self.layers = nn.Sequential(
+            nn.Conv2d(input_ch, d, kernel_size, stride),
+            activation(),
+            nn.Conv2d(d, d * 2, kernel_size, stride),
+            activation(),
+            nn.Conv2d(d * 2, d * 4, kernel_size, stride),
+            activation(),
+            nn.Conv2d(d * 4, d * 8, kernel_size, stride),
+            activation(),
+            nn.Flatten()
+        )
+        # elif wm_type=="v3":
+        #     h, w, input_ch = input_shape
+        #     act = getattr(torch.nn, act)
+        #     norm = getattr(torch.nn, norm)
+        #     layers = []
+        #     for i in range(int(np.log2(h) - np.log2(minres))):
+        #         if i == 0:
+        #             in_dim = input_ch
+        #         else:
+        #             in_dim = 2 ** (i - 1) * cnn_depth
+        #         out_dim = 2**i * cnn_depth
+        #         layers.append(
+        #             Conv2dSame(
+        #                 in_channels=in_dim,
+        #                 out_channels=out_dim,
+        #                 kernel_size=kernel_size,
+        #                 stride=2,
+        #                 bias=False,
+        #             )
+        #         )
+        #         layers.append(ChLayerNorm(out_dim))
+        #         layers.append(act())
+        #         h, w = h // 2, w // 2
 
-            self.out_dim = out_dim * h * w
-            self.layers = nn.Sequential(*layers)
-            self.layers.apply(tools_v3.weight_init)
+            # self.out_dim = out_dim * h * w
+            # self.layers = nn.Sequential(*layers)
+            # self.layers.apply(tools_v3.weight_init)
 
     def forward(self, x):
-        if self.wm_type=='v2':
+        # if self.wm_type=='v2':
             #（T,B,C,H,W）→（B*T,C,H,W)
             x, bd = flatten_batch(x, 3)
             y = self.layers(x)
             #（B*T,C,H,W）→（T,B,C,H,W)
             y = unflatten_batch(y, bd)
             return y
-        elif self.wm_type=='v3':
-            # # (batch, time, h, w, ch) -> (batch * time, h, w, ch)
-            # x = x.reshape((-1,) + tuple(x.shape[-3:]))
-            # # (batch * time, h, w, ch) -> (batch * time, ch, h, w)
-            # # 因为数据来源于v2，所以已经是ch,h,w了
-            # # x = x.permute(0, 3, 1, 2)
-            # x = self.layers(x)
-            # # (batch * time, ...) -> (batch * time, -1)
-            # x = x.reshape([x.shape[0], np.prod(x.shape[1:])])
-            # # (batch * time, -1) -> (batch, time, -1)
-            # return x.reshape(list(x.shape[:-3]) + [x.shape[-1]])
-              #（B,T,C,H,W）→（B*T,C,H,W)
-            x, bd = flatten_batch(x, 3)
-            y = self.layers(x)
-            #（B*T,C,H,W）→（B,T,C,H,W)
-            y = unflatten_batch(y, bd)
-            return y.reshape(y.shape[0], y.shape[1], -1)
+        # elif self.wm_type=='v3':
+        #     # # (batch, time, h, w, ch) -> (batch * time, h, w, ch)
+        #     # x = x.reshape((-1,) + tuple(x.shape[-3:]))
+        #     # # (batch * time, h, w, ch) -> (batch * time, ch, h, w)
+        #     # # 因为数据来源于v2，所以已经是ch,h,w了
+        #     # # x = x.permute(0, 3, 1, 2)
+        #     # x = self.layers(x)
+        #     # # (batch * time, ...) -> (batch * time, -1)
+        #     # x = x.reshape([x.shape[0], np.prod(x.shape[1:])])
+        #     # # (batch * time, -1) -> (batch, time, -1)
+        #     # return x.reshape(list(x.shape[:-3]) + [x.shape[-1]])
+        #       #（B,T,C,H,W）→（B*T,C,H,W)
+        #     x, bd = flatten_batch(x, 3)
+        #     y = self.layers(x)
+        #     #（B*T,C,H,W）→（B,T,C,H,W)
+        #     y = unflatten_batch(y, bd)
+        #     return y.reshape(y.shape[0], y.shape[1], -1)
 
 ## Add a new symlog for MLP encoder
 class DenseEncoder(nn.Module):
