@@ -9,11 +9,11 @@ This is a research project with no guarantees of stability and support. Breaking
 ## Quick start 
 If you want to use dreamer V2 for atari, try
 
-```python launch.py --config defaults_wis_v3 atari atari_pong --generator_prefill_steps 1000 --wm_type v2```
+```python launch.py --config defaults_wis_v3 atari atari_pong dreamer_v2```
 
 Also, for dreamer V3
 
-```python launch.py --config defaults_wis_v3 atari atari_pong --generator_prefill_steps 1000 --wm_type v3```
+```python launch.py --config defaults_wis_v3 atari atari_pong dreamer_v3```
 
 ## Mlflow Tracking
 
