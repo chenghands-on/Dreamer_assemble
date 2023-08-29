@@ -35,18 +35,17 @@ class Dreamer_agent(nn.Module):
 
         # World model
         self.wm_type=conf.wm_type
-        if self.wm_type=='v2':
-            self.wm = WorldModel_v2(obs_space,conf)
-        elif self.wm_type=='v3':
-            self.wm = WorldModel_v3(obs_space,step,conf,self._device)
+        # if self.wm_type=='v2':
+        self.wm = WorldModel(obs_space,step,conf,self._device)
+        # elif self.wm_type=='v3':
+            # self.wm = WorldModel_v3(obs_space,step,conf,self._device)
 
         # Actor critic
         
-        if self.wm_type=='v2':
-            self.ac = ActorCritic_v2(conf
-                              )
-        elif self.wm_type=='v3':
-            self.ac=ActorCritic_v3(conf,self.wm,self._device)
+        # if self.wm_type=='v2':
+        self.ac = ActorCritic(conf,self.wm,self._device)
+        # elif self.wm_type=='v3':
+        #     self.ac=ActorCritic_v3(conf,self.wm,self._device)
             #  self.ac = ActorCritic_v2(conf
             #                   )
 
@@ -125,6 +124,7 @@ class Dreamer_agent(nn.Module):
             value = self.ac.critic(feature)  # (1,B)
             metrics={}
             metrics.update(tensorstats(value.mode().detach(), "policy_value"))
+            # metrics = dict(policy_value=value.detach().mean())
             # feature = features[:, :, 0]  # (T=1,B,I=1,F) => (1,B,F) ## features.shape(1,1,1,2048)T*B*I*(D+S)
             # action_distr=self.ac.forward_actor(feature)
             # value=self.ac.forward_value(feature)
@@ -200,20 +200,20 @@ class Dreamer_agent(nn.Module):
                                     actions_dream.detach(),
                                     rewards_dream.mean.detach(),
                                     terminals_dream.mean.detach())
-            tensors.update(policy_value=unflatten_batch(tensors_ac['value'][0], (T, B, I)).mean(-1))
+            # tensors.update(policy_value=unflatten_batch(tensors_ac['value'][0], (T, B, I)).mean(-1))
         elif self.wm_type=="v3":
-            #  (loss_actor, loss_critic), features, actions,metrics_ac, tensors_ac = \
-            #     self.ac.training_step(features_dream.detach(),
-            #                         actions_dream.detach(),
-            #                         rewards_dream.detach(),
-            #                         terminals_dream.detach(),
-            #                         # states_dream
-            #                         )
-            (loss_actor, loss_critic), metrics_ac, tensors_ac = \
+             (loss_actor, loss_critic), metrics_ac, tensors_ac = \
                 self.ac.training_step(features_dream.detach(),
                                     actions_dream.detach(),
-                                    rewards_dream.mode().detach(),
-                                    terminals_dream.mode().detach())
+                                    rewards_dream.mean.detach(),
+                                    terminals_dream.mean.detach(),
+                                    # states_dream
+                                    )
+            # (loss_actor, loss_critic), metrics_ac, tensors_ac = \
+            #     self.ac.training_step(features_dream.detach(),
+            #                         actions_dream.detach(),
+            #                         rewards_dream.mode().detach(),
+            #                         terminals_dream.mode().detach())
             # tensors.update(policy_value=unflatten_batch(tensors_ac['value'][0], (T, B, I)).mean(-1))
         metrics.update(**metrics_ac)
        
@@ -267,9 +267,9 @@ class Dreamer_agent(nn.Module):
                     # print(non_zero_indices)
                     features_dream, actions_dream, rewards_dream, terminals_dream,states_dream = self.dream(in_state_dream, T - 1)  # H = T-1
                     # features_dream, actions_dream, rewards_dream, terminals_dream = self.dream_cond_action(in_state_dream, obs['action'])
-                    image_dream= self.wm.heads["decoder"](features_dream)["image"].mode()
+                    image_dream = self.wm.decoder.image.forward(features_dream)
                     # image_dream = self.wm.decoder.image.forward(features_dream)
-                    _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mode(), terminals_dream.mode(), log_only=True)
+                    _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mean, terminals_dream.mean, log_only=True)
                     ## 拿Dreamer_agent的数据只训练actor_critic
                     # _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream[1:,:,:], rewards_dream.mean, terminals_dream.mean, log_only=True)
                     # _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mean, terminals_dream.mean, log_only=True)
@@ -285,8 +285,8 @@ class Dreamer_agent(nn.Module):
                     #                      image_pred=image_dream,
                     #                      **tensors_ac)
                     dream_tensors = dict(action_pred=torch.cat([obs['action'][:1], actions_dream]),  # first action is real from previous step
-                                        reward_pred=rewards_dream.mode(),
-                                        terminal_pred=terminals_dream.mode(),
+                                        reward_pred=rewards_dream.mean,
+                                        terminal_pred=terminals_dream.mean,
                                         image_pred=image_dream,
                                         )
                     assert dream_tensors['action_pred'].shape == obs['action'].shape
@@ -431,8 +431,10 @@ class Dreamer_agent(nn.Module):
             rewards = self.wm.decoder.reward.forward(features)      # (H+1,TBI)
             terminals = self.wm.decoder.terminal.forward(features)  # (H+1,TBI)
         elif self.wm_type=='v3':
-            rewards=self.wm.heads["reward"](features)
-            terminals=self.wm.heads["terminal"](features)
+            # rewards=self.wm.heads["reward"](features)
+            # terminals=self.wm.heads["terminal"](features)
+            rewards = self.wm.decoder.reward.forward(features)      # (H+1,TBI)
+            terminals = self.wm.decoder.terminal.forward(features)  # (H+1,TBI)
             # # 获取字典中的键
             # keys =states[0].keys()
 
@@ -451,7 +453,7 @@ class Dreamer_agent(nn.Module):
                 if submodel is not None:
                     s.append(f'  {type(submodel).__name__:<15}: {param_count(submodel)} parameters')
         elif self.wm_type=="v3":
-            for submodel in (self.wm.encoder, self.wm.heads, self.wm.dynamics,self.ac):
+            for submodel in (self.wm.encoder, self.wm.decoder, self.wm.dynamics,self.ac):
                 if submodel is not None:
                     s.append(f'  {type(submodel).__name__:<15}: {param_count(submodel)} parameters')
         return '\n'.join(s)

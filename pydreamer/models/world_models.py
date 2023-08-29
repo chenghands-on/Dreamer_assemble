@@ -19,11 +19,14 @@ from . import tools_v3
 from .networks import *
 
 
-class WorldModel_v2(nn.Module):
+class WorldModel(nn.Module):
 
-    def __init__(self, obs_space,conf):
+    def __init__(self, obs_space,step, conf,device):
         super().__init__()
+        self._step=step
+        self._conf=conf
         shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
+        self._device=device
         self.deter_dim = conf.deter_dim
         self.stoch_dim = conf.stoch_dim
         self.stoch_discrete = conf.stoch_discrete
@@ -31,7 +34,6 @@ class WorldModel_v2(nn.Module):
         self.aux_critic_weight = conf.aux_critic_weight
         
         self.wm_type=conf.wm_type
-        # if self.wm_type=='v2':
         self.kl_balance=conf.kl_balance
        
         # Encoder
@@ -55,7 +57,7 @@ class WorldModel_v2(nn.Module):
         # Decoders for image,rewards and cont
 
         features_dim = conf.deter_dim + conf.stoch_dim * (conf.stoch_discrete or 1)
-        self.decoder = MultiDecoder_v2(features_dim, conf)
+        self.decoder = MultiDecoder(features_dim, conf)
         
         
         # Auxiliary critic
@@ -120,7 +122,6 @@ class WorldModel_v2(nn.Module):
         loss_reconstr, metrics, tensors = self.decoder.training_step(features, obs)
 
         # KL loss
-
         d = self.dynamics.zdistr
         dprior = d(prior)
         dpost = d(post)
@@ -132,16 +133,16 @@ class WorldModel_v2(nn.Module):
             else:
                 loss_kl_postgrad = D.kl.kl_divergence(dpost, d(prior.detach()))
                 loss_kl_priograd = D.kl.kl_divergence(d(post.detach()), dprior)
-                # if self.wm_type=='v2':
-                loss_kl = (1 - self.kl_balance) * loss_kl_postgrad + self.kl_balance * loss_kl_priograd
-                # elif self.wm_type=='v3':
-                    # kl_free = schedule(self.kl_free, self._step)
-                    # dyn_scale = schedule(self.dyn_scale, self._step)
-                    # rep_scale = schedule(self.rep_scale, self._step)
-                    ## Do a clip
-                    # rep_loss = torch.clip(loss_kl_postgrad, min=kl_free)
-                    # dyn_loss = torch.clip(loss_kl_priograd, min=kl_free)
-                    # loss_kl = dyn_scale * dyn_loss + rep_scale * rep_loss
+                if self.wm_type=='v2':
+                    loss_kl = (1 - self.kl_balance) * loss_kl_postgrad + self.kl_balance * loss_kl_priograd
+                elif self.wm_type=='v3':
+                    kl_free = schedule(self._conf.kl_free, self._step)
+                    dyn_scale = schedule(self._conf.dyn_scale, self._step)
+                    rep_scale = schedule(self._conf.rep_scale, self._step)
+                    # Do a clip
+                    rep_loss = torch.clip(loss_kl_postgrad, min=kl_free)
+                    dyn_loss = torch.clip(loss_kl_priograd, min=kl_free)
+                    loss_kl = dyn_scale * dyn_loss + rep_scale * rep_loss
         else:
             # Sampled KL loss, for IWAE
             z = post_samples.reshape(dpost.batch_shape + dpost.event_shape)
@@ -166,13 +167,14 @@ class WorldModel_v2(nn.Module):
 
         assert loss_kl.shape == loss_reconstr.shape
         loss_model_tbi = self.kl_weight * loss_kl + loss_reconstr
-        loss_model = -logavgexp(-loss_model_tbi, dim=2)
-        loss = loss_model.mean() + self.aux_critic_weight * loss_critic_aux
+        loss_model = -logavgexp(-loss_model_tbi, dim=2).mean()
+        # loss = loss_model.mean() + self.aux_critic_weight * loss_critic_aux
 
         # Metrics
 
         with torch.no_grad():
-            loss_kl = -logavgexp(-loss_kl_exact, dim=2)  # Log exact KL loss even when using IWAE, it avoids random negative values
+            # loss_kl = -logavgexp(-loss_kl_exact, dim=2)  # Log exact KL loss even when using IWAE, it avoids random negative values
+            loss_kl = -logavgexp(-loss_kl, dim=2)
             entropy_prior = dprior.entropy().mean(dim=2)
             entropy_post = dpost.entropy().mean(dim=2)
             tensors.update(loss_kl=loss_kl.detach(),
@@ -182,6 +184,12 @@ class WorldModel_v2(nn.Module):
                            loss_kl=loss_kl.mean(),
                            entropy_prior=entropy_prior.mean(),
                            entropy_post=entropy_post.mean())
+            if self.wm_type=='v3':
+                metrics["kl_free"] = kl_free
+                metrics["dyn_scale"] =dyn_scale
+                metrics["rep_scale"] = rep_scale
+                metrics["loss_dyn"] = to_np(torch.mean(dyn_loss))
+                metrics["loss_rep"] = to_np(torch.mean(rep_loss))
 
         # Predictions
 
@@ -198,7 +206,7 @@ class WorldModel_v2(nn.Module):
                 tensors.update(**tensors_logprob)  # logprob_image, ...
                 tensors.update(**tensors_pred)  # image_pred, ...
 
-        return loss, features, states, out_state, metrics, tensors
+        return loss_model, features, states, out_state, metrics, tensors
     
     
 class WorldModel_v3(nn.Module):
@@ -207,13 +215,10 @@ class WorldModel_v3(nn.Module):
         super().__init__()
         self._step = step
         # self._use_amp = True if conf.precision == 16 else False
-        self.kl_weight = conf.kl_weight
         self._conf = conf
         shapes = {k: tuple(v.shape) for k, v in obs_space.spaces.items()}
         self._device=device
-        # Encoder
-        # self.encoder = MultiEncoder_v3(shapes, conf)
-        self.encoder = MultiEncoder_v2(shapes,conf)
+        
         self.deter_dim = conf.deter_dim
         self.stoch_dim = conf.stoch_dim
         self.stoch_discrete = conf.stoch_discrete
@@ -221,6 +226,9 @@ class WorldModel_v3(nn.Module):
         self.aux_critic_weight = conf.aux_critic_weight
         self.kl_balance=conf.kl_balance
         
+        # Encoder
+        # self.encoder = MultiEncoder_v3(shapes, conf)
+        self.encoder = MultiEncoder_v2(shapes,conf)
         # RSSM
         # self.embed_size = self.encoder.out_dim
         # # self.dynamics = RSSM(
@@ -258,64 +266,65 @@ class WorldModel_v3(nn.Module):
                              layer_norm=conf.layer_norm,
                              tidy=conf.tidy)
         # dECODERS FOR IMAGE,REWARDS and counts
-        # self.decoder = MultiDecoder_v2(features_dim, conf)
-        self.heads = nn.ModuleDict()
         if conf.dyn_discrete:
             # features_dim = conf.dyn_stoch * conf.dyn_discrete + conf.dyn_deter
             features_dim=conf.deter_dim+conf.stoch_dim * (conf.stoch_discrete or 1)
         else:
-            # features_dim = conf.dyn_stoch + conf.dyn_deter
-            features_dim=conf.deter_dim+conf.stoch_dim
-        self.heads["decoder"] = MultiDecoder_v3(
-            features_dim, shapes, **conf.decoder
-        )
-        if conf.reward_head == "symlog_disc":
-            self.heads["reward"] = MLP_v3(
-                features_dim,  # pytorch version
-                (255,),
-                conf.reward_layers,
-                conf.units,
-                conf.act,
-                conf.norm,
-                dist=conf.reward_head,
-                outscale=0.0,
-                device=self._device,
-            )
-        else:
-            self.heads["reward"] = MLP_v3(
-                features_dim,  # pytorch version
-                [],
-                conf.reward_layers,
-                conf.units,
-                conf.act,
-                conf.norm,
-                dist=conf.reward_head,
-                outscale=0.0,
-                device=self._device,
-            )
-        self.heads["terminal"] = MLP_v3(
-            features_dim,  # pytorch version
-            [],
-            conf.terminal_layers,
-            conf.units,
-            conf.act,
-            conf.norm,
-            dist="binary",
-            device=self._device,
-        )
-        for name in conf.grad_heads:
-            assert name in self.heads, name
-        # self._model_opt = tools_v3.Optimizer(
-        #     "model",
-        #     self.parameters(),
-        #     conf.model_lr,
-        #     conf.opt_eps,
-        #     conf.grad_clip,
-        #     conf.weight_decay,
-        #     opt=conf.opt,
-        #     use_amp=self._use_amp,
+            features_dim = conf.dyn_stoch + conf.dyn_deter
+        self.decoder = MultiDecoder_v2(features_dim, conf)
+        # self.heads = nn.ModuleDict()
+        
+        #     features_dim=conf.deter_dim+conf.stoch_dim
+        # self.heads["decoder"] = MultiDecoder_v3(
+        #     features_dim, shapes, **conf.decoder
         # )
-        self._scales = dict(reward=conf.reward_scale, cont=conf.terminal_scale)
+        # if conf.reward_head == "symlog_disc":
+        #     self.heads["reward"] = MLP_v3(
+        #         features_dim,  # pytorch version
+        #         (255,),
+        #         conf.reward_layers,
+        #         conf.units,
+        #         conf.act,
+        #         conf.norm,
+        #         dist=conf.reward_head,
+        #         outscale=0.0,
+        #         device=self._device,
+        #     )
+        # else:
+        #     self.heads["reward"] = MLP_v3(
+        #         features_dim,  # pytorch version
+        #         [],
+        #         conf.reward_layers,
+        #         conf.units,
+        #         conf.act,
+        #         conf.norm,
+        #         dist=conf.reward_head,
+        #         outscale=0.0,
+        #         device=self._device,
+        #     )
+        # self.heads["terminal"] = MLP_v3(
+        #     features_dim,  # pytorch version
+        #     [],
+        #     conf.terminal_layers,
+        #     conf.units,
+        #     conf.act,
+        #     conf.norm,
+        #     dist="binary",
+        #     device=self._device,
+        # )
+        # for name in conf.grad_heads:
+        #     assert name in self.heads, name
+        # # self._model_opt = tools_v3.Optimizer(
+        # #     "model",
+        # #     self.parameters(),
+        # #     conf.model_lr,
+        # #     conf.opt_eps,
+        # #     conf.grad_clip,
+        # #     conf.weight_decay,
+        # #     opt=conf.opt,
+        # #     use_amp=self._use_amp,
+        # # )
+        # self._scales = dict(reward=conf.reward_scale, terminal=conf.terminal_scale)
         
     def init_state(self, batch_size: int) -> Tuple[Any, Any]:
         return self.dynamics.init_state(batch_size)
@@ -372,18 +381,18 @@ class WorldModel_v3(nn.Module):
         
         
         # # Decoder
-        preds={}
-        for name, head in self.heads.items():
-            grad_head = name in self._conf.grad_heads
-            # features = self.dynamics.to_feature(post)
-            features = features if grad_head else features.detach()
-            features_decoder=features[:,:,0]
-            pred = head(features_decoder)
-            if type(pred) is dict:
-                preds.update(pred)
-            else:
-                preds[name] = pred
-        # loss_reconstr, metrics, tensors = self.decoder.training_step(features, obs)
+        # preds={}
+        # for name, head in self.heads.items():
+        #     grad_head = name in self._conf.grad_heads
+        #     # features = self.dynamics.to_feature(post)
+        #     features = features if grad_head else features.detach()
+        #     features_decoder=features[:,:,0]
+        #     pred = head(features_decoder)
+        #     if type(pred) is dict:
+        #         preds.update(pred)
+        #     else:
+        #         preds[name] = pred
+        loss_reconstr, metrics, tensors = self.decoder.training_step(features, obs)
         # KL loss
         kl_free = tools_v3.schedule(self._conf.kl_free, self._step)
         dyn_scale = tools_v3.schedule(self._conf.dyn_scale, self._step)
@@ -411,24 +420,24 @@ class WorldModel_v3(nn.Module):
        
                 
         # Decoder Loss
-        losses = {}
-        for name, pred in preds.items():
-            # pred=pred[:,:,0] ##把iwae sample给去掉
-            # I = features.shape[2]
-            # target = insert_dim(obs[name], 2, I)  # Expand target with iwae_samples dim, because features have it
-            like = pred.log_prob(obs[name])
-            losses[name] = -torch.mean(like) * self._scales.get(name, 1.0)
+        # losses = {}
+        # for name, pred in preds.items():
+        #     # pred=pred[:,:,0] ##把iwae sample给去掉
+        #     # I = features.shape[2]
+        #     # target = insert_dim(obs[name], 2, I)  # Expand target with iwae_samples dim, because features have it
+        #     like = pred.log_prob(obs[name])
+        #     losses[name] = -torch.mean(like) * self._scales.get(name, 1.0)
         
         # Total loss
 
-        # assert loss_kl.shape == loss_reconstr.shape
-        # loss_model_tbi = self.kl_weight * loss_kl + loss_reconstr
-        # model_loss = -logavgexp(-loss_model_tbi, dim=2).mean()
+        assert loss_kl.shape == loss_reconstr.shape
+        loss_model_tbi = self.kl_weight * loss_kl + loss_reconstr
+        model_loss = -logavgexp(-loss_model_tbi, dim=2).mean()
         # loss = loss_model.mean() + self.aux_critic_weight * loss_critic_aux
             
-        loss_kl=torch.mean(loss_kl)
-        model_loss = sum(losses.values()) + self.kl_weight * loss_kl
-        #     metrics = self._model_opt(model_loss, self.parameters())
+        # loss_kl=torch.mean(loss_kl)
+        # model_loss = sum(losses.values()) + self.kl_weight * loss_kl
+        # #     metrics = self._model_opt(model_loss, self.parameters())
         
         
         # Metrics
@@ -436,14 +445,14 @@ class WorldModel_v3(nn.Module):
             tensors = {}
             metrics = {}
             metrics["loss_model"] = model_loss.detach().cpu().numpy()
-            metrics.update({f"{name}_loss": to_np(loss) for name, loss in losses.items()})
+            # metrics.update({f"{name}_loss": to_np(loss) for name, loss in losses.items()})
             metrics["kl_free"] = kl_free
             metrics["dyn_scale"] =dyn_scale
             metrics["rep_scale"] = rep_scale
             metrics["loss_dyn"] = to_np(torch.mean(dyn_loss))
             metrics["loss_rep"] = to_np(torch.mean(rep_loss))
-            # metrics["loss_kl"] = to_np(torch.mean(loss_kl))
-            metrics["loss_kl"] = to_np(loss_kl)
+            metrics["loss_kl"] = to_np(torch.mean(loss_kl))
+            # metrics["loss_kl"] = to_np(loss_kl)
             # v2的东西
             # entropy_prior = dprior.entropy().mean(dim=2)
             # entropy_post = dpost.entropy().mean(dim=2)
@@ -469,33 +478,33 @@ class WorldModel_v3(nn.Module):
         
         # Predictions
         if do_image_pred:
-            prior_samples = self.dynamics.zdistr(prior).sample().reshape(post_samples.shape)
-            features_prior = self.dynamics.feature_replace_z(features, prior_samples)
-            openl = self.heads["decoder"](features_prior)["image"].mode()
-            reward_prior = self.heads["reward"](features_prior).mode()
-            # observed image is given until 5 steps
-            # model = torch.cat([recon[:5, :6], openl], 0)
-            model=openl[:,:,0]
-            # truth = obs["image"] + 0.5
-            # model = model + 0.5
-            truth=obs['image']
-            error = (model - truth + 1.0) / 2.0
+            # prior_samples = self.dynamics.zdistr(prior).sample().reshape(post_samples.shape)
+            # features_prior = self.dynamics.feature_replace_z(features, prior_samples)
+            # openl = self.heads["decoder"](features_prior)["image"].mode()
+            # reward_prior = self.heads["reward"](features_prior).mode()
+            # # observed image is given until 5 steps
+            # # model = torch.cat([recon[:5, :6], openl], 0)
+            # model=openl[:,:,0]
+            # # truth = obs["image"] + 0.5
+            # # model = model + 0.5
+            # truth=obs['image']
+            # error = (model - truth + 1.0) / 2.0
         
         # train 中已有函数保存original data了
         # tensors.update(data)
-            tensors["image_pred"]=model.detach()
-            tensors["image_error"]=error.detach()
-            # with torch.no_grad():
-            #     prior_samples = self.dynamics.zdistr(prior).sample().reshape(post_samples.shape)
-            #     features_prior = self.dynamics.feature_replace_z(features, prior_samples)
-            #     # Decode from prior(就是没有看到xt，凭借ht直接给出的预测)
-            #     _, mets, tens = self.decoder.training_step(features_prior, obs, extra_metrics=True)
-            #     metrics_logprob = {k.replace('loss_', 'logprob_'): v for k, v in mets.items() if k.startswith('loss_')}
-            #     tensors_logprob = {k.replace('loss_', 'logprob_'): v for k, v in tens.items() if k.startswith('loss_')}
-            #     tensors_pred = {k.replace('_rec', '_pred'): v for k, v in tens.items() if k.endswith('_rec')}
-            #     metrics.update(**metrics_logprob)   # logprob_image, ...
-            #     tensors.update(**tensors_logprob)  # logprob_image, ...
-            #     tensors.update(**tensors_pred)  # image_pred, ...
+            # tensors["image_pred"]=model.detach()
+            # tensors["image_error"]=error.detach()
+            with torch.no_grad():
+                prior_samples = self.dynamics.zdistr(prior).sample().reshape(post_samples.shape)
+                features_prior = self.dynamics.feature_replace_z(features, prior_samples)
+                # Decode from prior(就是没有看到xt，凭借ht直接给出的预测)
+                _, mets, tens = self.decoder.training_step(features_prior, obs, extra_metrics=True)
+                metrics_logprob = {k.replace('loss_', 'logprob_'): v for k, v in mets.items() if k.startswith('loss_')}
+                tensors_logprob = {k.replace('loss_', 'logprob_'): v for k, v in tens.items() if k.startswith('loss_')}
+                tensors_pred = {k.replace('_rec', '_pred'): v for k, v in tens.items() if k.endswith('_rec')}
+                metrics.update(**metrics_logprob)   # logprob_image, ...
+                tensors.update(**tensors_logprob)  # logprob_image, ...
+                tensors.update(**tensors_pred)  # image_pred, ...
         return model_loss,features, states, out_state, metrics,tensors
 
     def preprocess(self, obs,forward_only=False):

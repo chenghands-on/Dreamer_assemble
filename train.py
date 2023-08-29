@@ -252,6 +252,9 @@ def run(conf,space):
                         data_train_stats = DataSequential(MlflowEpisodeRepository(input_dirs), conf.batch_length, conf.batch_size)
                         metrics['data_steps'].append(data_train_stats.stats_steps)
                         metrics['data_env_steps'].append(data_train_stats.stats_steps * conf.env_action_repeat)
+                        while steps*200/6>data_train_stats.stats_steps:
+                            time.sleep(100)
+                            data_train_stats = DataSequential(MlflowEpisodeRepository(input_dirs), conf.batch_length, conf.batch_size)
                         if data_train_stats.stats_steps * conf.env_action_repeat >= conf.n_env_steps:
                             info(f'Finished {conf.n_env_steps} env steps.')
                             return
@@ -459,7 +462,7 @@ def prepare_batch_npz(data: Dict[str, Tensor], take_b=999):
         # if take_b < val.shape[1]:
         #     val = val[:, :take_b]
         try:
-            print(key)
+            # print(key)
     # 尝试访问 shape 属性
             if take_b < val.shape[1]:
                 val = val[:, :take_b]

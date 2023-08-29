@@ -635,7 +635,7 @@ class Bernoulli:
 
     def mode(self):
         _mode = torch.round(self._dist.mean)
-        return _mode.detach() + self._dist.mean - self._dist.mean.detach()
+        return (_mode.detach() + self._dist.mean - self._dist.mean.detach()).squeeze(-1)
 
     def sample(self, sample_shape=()):
         return self._dist.rsample(sample_shape)
@@ -644,6 +644,8 @@ class Bernoulli:
         _logits = self._dist.base_dist.logits
         if _logits.shape[-1]==1:
             _logits=_logits.squeeze(-1)
+        if x.shape[-1]==1:
+            x=x.squeeze(-1)
         log_probs0 = -F.softplus(_logits)
         log_probs1 = -F.softplus(-_logits)
 

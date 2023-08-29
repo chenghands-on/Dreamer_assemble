@@ -147,6 +147,27 @@ class MLP_v3(nn.Module):
             else:
                 std = self._std
             return self.dist(self._dist, mean, std, self._shape)
+        
+    def loss(self, output: D.Distribution, target: Tensor) -> Tensor:
+        return -output.log_prob(target)
+        
+    def training_step(self, features,target: Tensor):
+    # if self._dist=='binary':
+        assert len(features.shape) == 4
+        I = features.shape[2]
+        target = insert_dim(target, 2, I)  # Expand target with iwae_samples dim, because features have it
+        if len(target.shape)==3:
+            target= target.unsqueeze(-1)
+
+        decoded = self.forward(features)
+        loss_tbi = self.loss(decoded, target)
+        loss_tb = -logavgexp(-loss_tbi, dim=2)  # TBI => TB
+        decoded = decoded.mode().mean(dim=-2)
+
+        assert len(loss_tbi.shape) == 3
+        assert len(loss_tb.shape) == 2
+        assert len(decoded.shape) == 2
+        return loss_tbi, loss_tb, decoded
 
     def dist(self, dist, mean, std, shape):
         if dist == "normal":

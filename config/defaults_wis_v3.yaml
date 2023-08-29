@@ -7,8 +7,8 @@ defaults_wis_v3:
   offline_test_dir:
   offline_eval_dir:
   log_interval: 100
-  # logbatch_interval: 1000
-  logbatch_interval: 2000
+  logbatch_interval: 1000
+  # logbatch_interval: 2000
   save_interval: 500
   eval_interval: 2000
   data_workers: 4
