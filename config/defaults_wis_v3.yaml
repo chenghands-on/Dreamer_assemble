@@ -273,9 +273,11 @@ atari:
   entropy: 0.001
 
 dmc:
+  n_env_steps: 5_000_000
   env_id: DMC-quadruped_run
   action_dim: 12
   env_time_limit: 500  # =1000/action_repeat
+  # env_time_limit: 1000
   env_action_repeat: 2
   generator_workers: 2
   generator_prefill_steps: 5000
@@ -283,6 +285,8 @@ dmc:
   actor_grad: dynamics
   actor_dist: tanh_normal
   clip_rewards: tanh
+  #我加的
+  env_no_terminal: True
 
 dmlab:
   env_id: DmLab-rooms_watermaze

@@ -202,18 +202,18 @@ class Dreamer_agent(nn.Module):
                                     terminals_dream.mean.detach())
             # tensors.update(policy_value=unflatten_batch(tensors_ac['value'][0], (T, B, I)).mean(-1))
         elif self.wm_type=="v3":
-             (loss_actor, loss_critic), metrics_ac, tensors_ac = \
-                self.ac.training_step(features_dream.detach(),
-                                    actions_dream.detach(),
-                                    rewards_dream.mean.detach(),
-                                    terminals_dream.mean.detach(),
-                                    # states_dream
-                                    )
-            # (loss_actor, loss_critic), metrics_ac, tensors_ac = \
+            #  (loss_actor, loss_critic), metrics_ac, tensors_ac = \
             #     self.ac.training_step(features_dream.detach(),
             #                         actions_dream.detach(),
-            #                         rewards_dream.mode().detach(),
-            #                         terminals_dream.mode().detach())
+            #                         rewards_dream.mean.detach(),
+            #                         terminals_dream.mean.detach(),
+            #                         # states_dream
+            #                         )
+            (loss_actor, loss_critic), metrics_ac, tensors_ac = \
+                self.ac.training_step(features_dream.detach(),
+                                    actions_dream.detach(),
+                                    rewards_dream.mode().detach(),
+                                    terminals_dream.mode().detach())
             # tensors.update(policy_value=unflatten_batch(tensors_ac['value'][0], (T, B, I)).mean(-1))
         metrics.update(**metrics_ac)
        
@@ -269,7 +269,7 @@ class Dreamer_agent(nn.Module):
                     # features_dream, actions_dream, rewards_dream, terminals_dream = self.dream_cond_action(in_state_dream, obs['action'])
                     image_dream = self.wm.decoder.image.forward(features_dream)
                     # image_dream = self.wm.decoder.image.forward(features_dream)
-                    _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mean, terminals_dream.mean, log_only=True)
+                    _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mode(), terminals_dream.mode(), log_only=True)
                     ## 拿Dreamer_agent的数据只训练actor_critic
                     # _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream[1:,:,:], rewards_dream.mean, terminals_dream.mean, log_only=True)
                     # _, _, tensors_ac = self.ac.training_step(features_dream, actions_dream, rewards_dream.mean, terminals_dream.mean, log_only=True)
@@ -285,8 +285,8 @@ class Dreamer_agent(nn.Module):
                     #                      image_pred=image_dream,
                     #                      **tensors_ac)
                     dream_tensors = dict(action_pred=torch.cat([obs['action'][:1], actions_dream]),  # first action is real from previous step
-                                        reward_pred=rewards_dream.mean,
-                                        terminal_pred=terminals_dream.mean,
+                                        reward_pred=rewards_dream.mode(),
+                                        terminal_pred=terminals_dream.mode(),
                                         image_pred=image_dream,
                                         )
                     assert dream_tensors['action_pred'].shape == obs['action'].shape

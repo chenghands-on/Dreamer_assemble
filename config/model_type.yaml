@@ -5,6 +5,7 @@ dreamer_v2:
   batch_size: 16
   # amp: False  # AMP no longer helps on A100
   probe_gradients: False  # for baselines
+  
 
 dreamer_v3:
   wm_type: v3
@@ -22,6 +23,8 @@ dreamer_v3:
   value_grad_clip: 100
   actor_grad_clip: 100
   probe_gradients: False
+  # encoder: {mlp_keys: '$^', cnn_keys: 'image'}
+  # decoder: {mlp_keys: '$^', cnn_keys: 'image'}
   # dataset_size: 1000000
 
   # a2c.

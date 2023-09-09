@@ -4,7 +4,7 @@
 
 atari_pong:
   # n_env_steps: 20_000_000
-  n_env_steps: 2_000_000
+  n_env_steps: 20_000_000
   env_id: Atari-Pong
 
 atari_breakout:

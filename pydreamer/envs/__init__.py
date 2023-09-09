@@ -51,9 +51,10 @@ def create_env(env_id: str, no_terminal: bool, env_time_limit: int, env_action_r
         env = wrappers.RestartOnExceptionWrapper(constr)
 
     elif env_id.startswith('DMC-'):
-        from .dmc import DMC_v2
-        env = DMC_v2(env_id.split('-', maxsplit=1)[1].lower(), action_repeat=env_action_repeat)
-    
+        from .dmc import DMC_v2,DMC_v3
+        env = DMC_v3(env_id.split('-', maxsplit=1)[1].lower(), action_repeat=env_action_repeat)
+        
+        env = wrappers.NormalizeActions(env)
     elif env_id.startswith('Embodied-'):
         from .embodied import EmbodiedEnv
         task = env_id.split('-', maxsplit=1)[1].lower()

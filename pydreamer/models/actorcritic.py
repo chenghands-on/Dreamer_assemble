@@ -46,15 +46,31 @@ class ActorCritic(nn.Module):
         # self.slow_target_fraction=conf.slow_target_fraction
         # self.actor_grad = conf.actor_grad
         # self.actor_dist = conf.actor_dist
-        actor_out_dim = conf.action_dim if conf.actor_dist == 'onehot' else 2 * conf.action_dim
+        actor_out_dim = conf.action_dim if conf.actor_dist in ["normal_1", "onehot", "onehot_gumbel"]  else 2 * conf.action_dim
         feat_size = conf.deter_dim + conf.stoch_dim * (conf.stoch_discrete or 1)
         self.feat_size = feat_size
         hidden_layers=4
         
-        self.actor = MLP_v2(feat_size, actor_out_dim, conf.hidden_dim, hidden_layers, conf.layer_norm)
+        
         if self.wm_type=='v2':
+            self.actor = MLP_v2(feat_size, actor_out_dim, conf.hidden_dim, hidden_layers, conf.layer_norm)
             self.critic = MLP_v2(feat_size, 1,  conf.hidden_dim, hidden_layers, conf.layer_norm)
         elif self.wm_type=='v3':
+            self.actor = ActionHead(
+            feat_size,
+            actor_out_dim,
+            conf.actor_layers,
+            conf.units,
+            conf.act,
+            conf.norm,
+            conf.actor_dist,
+            conf.actor_init_std,
+            conf.actor_min_std,
+            conf.actor_max_std,
+            conf.actor_temp,
+            outscale=1.0,
+            unimix_ratio=conf.action_unimix_ratio,
+            )   
             if self._conf.reward_EMA:
                 self.reward_ema = RewardEMA(device=self._device)
             if conf.value_head == "symlog_disc":
@@ -90,16 +106,20 @@ class ActorCritic(nn.Module):
             self._updates = 0
 
     def forward_actor(self, features: Tensor) -> D.Distribution:
-        y = self.actor.forward(features).float()  # .float() to force float32 on AMP
-        
-        if self._conf.actor_dist == 'onehot':
-            return D.OneHotCategorical(logits=y)
-        
-        if self._conf.actor_dist == 'normal_tanh':
-            return normal_tanh(y)
+        if self.wm_type=='v2':
+            y = self.actor.forward(features).float()  # .float() to force float32 on AMP
+            
+            if self._conf.actor_dist == 'onehot':
+                return D.OneHotCategorical(logits=y)
+            
+            if self._conf.actor_dist == 'normal_tanh':
+                return normal_tanh(y)
 
-        if self._conf.actor_dist == 'tanh_normal':
-            return tanh_normal(y)
+            if self._conf.actor_dist == 'tanh_normal':
+                return tanh_normal(y)
+        elif self.wm_type=='v3':
+            y = self.actor.forward(features)
+            return y
 
         assert False, self._conf.actor_dist
 

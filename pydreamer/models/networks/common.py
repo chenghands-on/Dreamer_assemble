@@ -236,7 +236,8 @@ class ActionHead(nn.Module):
         self._pre_layers.apply(weight_init)
 
         if self._dist in ["tanh_normal", "tanh_normal_5", "normal", "trunc_normal"]:
-            self._dist_layer = nn.Linear(self._units, 2 * self._size)
+            # self._dist_layer = nn.Linear(self._units, 2 * self._size)
+            self._dist_layer = nn.Linear(self._units, self._size)
             self._dist_layer.apply(uniform_weight_init(outscale))
 
         elif self._dist in ["normal_1", "onehot", "onehot_gumbel"]:
@@ -247,7 +248,7 @@ class ActionHead(nn.Module):
         x = features
         x = self._pre_layers(x)
         if self._dist == "tanh_normal":
-            ## We replace original tan_normal with normal code
+            # We replace original tan_normal with normal code because in V3 ,orginally we use normal in dmc, but we can have one actor dist
             # x = self._dist_layer(x)
             # # mean, std = torch.split(x, 2, -1)
             # mean, std = torch.split(x, [self._size] * 2, -1)
@@ -260,7 +261,9 @@ class ActionHead(nn.Module):
             # dist = torchd.independent.Independent(dist, 1)
             # dist = SampleDist(dist)
             x = self._dist_layer(x)
-            mean, std = torch.split(x, [self._size] * 2, -1)
+            # 我们在actor_dim那里已经乘过2了，对于不同的actor_dist
+            # mean, std = torch.split(x, [self._size] * 2, -1)
+            mean, std = torch.split(x, [self._size//2]*2, -1)
             std = (self._max_std - self._min_std) * torch.sigmoid(
                 std + 2.0
             ) + self._min_std

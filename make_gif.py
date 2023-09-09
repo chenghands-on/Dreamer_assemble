@@ -68,20 +68,20 @@ def make_gif_wm(env_name,path,index,action_type,fps=10,dream=True):
             f.write(gif)
             
 def make_gif(env_name, run_id, step, fps=10):
-    B=1;T=48
+    B=3;T=480
     dest_path = f'figures/dream_{env_name}_{step}_v3.gif'
     # artifact = f'd2_wm_dream/{step}.npz'
     artifact = f'd2_wm_dream/{step}.npz'
     data = download_artifact_npz(run_id, artifact)
-    img = data['image_error']
-    print(img)
-    print(img.shape)
+    img = data['image_pred']
+    # print(img)
+    # print(img.shape)
     img = img[:B, :T].reshape((-1, 64, 64, 3))
     gif = encode_gif(img, fps)
     with Path(dest_path).open('wb') as f:
         f.write(gif)
 
-make_gif('dmc_walker_run', '8f788b70a59144d7b6751338a28c2909', '0040001')
+make_gif('dmc_walker_run_903_pred', '210c0c0aed204e6d98506842544e5f24', '0005001')
 # path1='/home/chenghan/pydreamer/wm_results/tensors_Atari-Pong_704_data.npz'
 # /home/chenghan/dreamer_assemble/mlruns/0/a91b13b54b05440d8b34228a8248c4db/artifacts
 # # path2='/home/chenghan/pydreamer/wm_results/dream_tensors_Atari-Pong_704_data.npz'

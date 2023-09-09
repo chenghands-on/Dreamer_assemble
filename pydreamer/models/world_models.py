@@ -63,7 +63,7 @@ class WorldModel(nn.Module):
         # Auxiliary critic
 
         if conf.aux_critic:
-            self.ac_aux = ActorCritic_v2(in_dim=features_dim,
+            self.ac_aux = ActorCritic(in_dim=features_dim,
                                       out_actions=conf.action_dim,
                                       layer_norm=conf.layer_norm,
                                       gamma=conf.gamma_aux,
@@ -136,9 +136,9 @@ class WorldModel(nn.Module):
                 if self.wm_type=='v2':
                     loss_kl = (1 - self.kl_balance) * loss_kl_postgrad + self.kl_balance * loss_kl_priograd
                 elif self.wm_type=='v3':
-                    kl_free = schedule(self._conf.kl_free, self._step)
-                    dyn_scale = schedule(self._conf.dyn_scale, self._step)
-                    rep_scale = schedule(self._conf.rep_scale, self._step)
+                    kl_free = tools_v3.schedule(self._conf.kl_free, self._step)
+                    dyn_scale = tools_v3.schedule(self._conf.dyn_scale, self._step)
+                    rep_scale = tools_v3.schedule(self._conf.rep_scale, self._step)
                     # Do a clip
                     rep_loss = torch.clip(loss_kl_postgrad, min=kl_free)
                     dyn_loss = torch.clip(loss_kl_priograd, min=kl_free)
